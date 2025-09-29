@@ -6,6 +6,35 @@ import re, unicodedata, difflib
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 
+
+# --- design refresh (inline, no sidebar changes) ---
+import streamlit as st
+
+def _design_refresh(title: str, subtitle: str=""):
+    try:
+        st.set_page_config(page_title=title, layout="wide")
+    except Exception:
+        # set_page_config can only be called once; ignore if already set elsewhere.
+        pass
+    st.markdown("""
+    <style>
+      :root { --ink:#0f172a; --muted:#64748b; --panel:#f8fafc; }
+      .stButton>button, .stDownloadButton>button {
+        border-radius: 12px; padding: .55rem .9rem; font-weight: 600;
+        border: 1px solid #e2e8f0;
+      }
+      .stButton>button:hover { box-shadow: 0 0 0 2px rgba(14,165,233,.18); }
+      .app-card { background: var(--panel); border:1px solid #e2e8f0; border-radius:16px; padding:14px; margin-bottom:12px;}
+      .titlebar h1 { margin: 0 0 .25rem 0; color: var(--ink); font-size: 1.4rem;}
+      .titlebar .sub { color: var(--muted); font-size:.95rem; }
+    </style>
+    """, unsafe_allow_html=True)
+    st.markdown(f"<div class='titlebar'><h1>{title}</h1>" + (f"<div class='sub'>{subtitle}</div>" if subtitle else "") + "</div>", unsafe_allow_html=True)
+# --- end design refresh ---
+
+_design_refresh('천장판 최적화', 'UI 정리 · 사이드바 유지')
+
+
 import numpy as np
 import pandas as pd
 import streamlit as st

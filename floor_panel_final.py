@@ -6,56 +6,214 @@ from typing import Optional, Dict, Any
 # --- design refresh (prettier inline) ---
 import streamlit as st
 
-def _design_refresh(title: str, subtitle: str=""):
-    try:
-        st.set_page_config(page_title=title, layout="wide")
-    except Exception:
-        pass
-    st.markdown("""
+
+def _design_refresh():
+
+    st.markdown(
+        """
     <style>
-      :root {
-        --brand: #2563eb;
-        --brand-light: #3b82f6;
-        --ink: #1e293b;
-        --muted: #64748b;
-        --panel: #f9fafb;
+      :root{
+        /* Sidebar dark palette */
+        --sb-bg:#0b1220;         /* 다크 네이비 */
+        --sb-fg:#e2e8f0;         /* 본문 텍스트 */
+        --sb-muted:#475569;      /* 🔸보조 텍스트: 더 밝게/진하게 */
+        --sb-line:#1f2a44;
+
+
+        --accent:#f1f5f9;   /* 거의 흰색 (상단) */
+        --accent-2:#cbd5e1; /* 밝은 회색 (하단) */
+
+        /* Main content neutrals */
+        --ink:#0f172a;
+        --muted:#475569;
+        --line:#e2e8f0;
       }
-      .stButton>button, .stDownloadButton>button {
-        border-radius: 10px;
-        padding: .55rem 1rem;
-        font-weight: 600;
-        border: none;
-        background: var(--brand);
-        color: white;
-        transition: background .2s ease;
+
+      /* Sidebar Dark */
+      section[data-testid="stSidebar"]{
+        background:var(--sb-bg)!important; color:var(--sb-fg)!important;
+        border-right:1px solid var(--sb-line);
       }
-      .stButton>button:hover, .stDownloadButton>button:hover {
-        background: var(--brand-light);
-        color: #fff;
+      section[data-testid="stSidebar"] *{ color:var(--sb-fg)!important; }
+      section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h2,section[data-testid="stSidebar"] h3{
+        color:var(--sb-fg)!important;
       }
-      .app-card {
-        background: var(--panel);
-        border-radius: 14px;
-        padding: 16px;
-        margin-bottom: 14px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+
+      /* 🔸보조 텍스트/라벨: 더 선명 + 약간 굵게 */
+      section[data-testid="stSidebar"] .stMarkdown p,
+      section[data-testid="stSidebar"] label,
+      section[data-testid="stSidebar"] .stSelectbox label{
+        color:var(--sb-muted)!important;
+        font-weight:600!important;
       }
-      .titlebar h1 {
-        margin: 0 0 .3rem 0;
-        color: var(--ink);
-        font-size: 1.5rem;
+
+      /* Inputs in sidebar */
+      section[data-testid="stSidebar"] input,
+      section[data-testid="stSidebar"] textarea,
+      section[data-testid="stSidebar"] select,
+      section[data-testid="stSidebar"] .stTextInput input,
+      section[data-testid="stSidebar"] .stNumberInput input{
+        background:rgba(255,255,255,0.06)!important;
+        border:1px solid var(--sb-line)!important;
+        color:var(--sb-muted)!important;
       }
-      .titlebar .sub {
-        color: var(--muted);
-        font-size: .95rem;
-        margin-bottom: .5rem;
+
+      /* 🔧 Slider cutoff fix */
+      section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ padding-right:12px; }
+      section[data-testid="stSidebar"] div[data-testid="stSlider"]{
+        padding-right:12px; margin-right:2px; overflow:visible;
+      }
+      section[data-testid="stSidebar"] div[role="slider"]{
+        box-shadow:0 0 0 2px rgba(20,184,166,0.25); border-radius:999px;
+      }
+
+      /* ✅ Radio: 색/정렬 깔끔하게 (red → teal, 정중앙 정렬) */
+      /* Streamlit 라디오 인풋 컬러를 액센트로 통일 */
+      input[type="radio"]{ accent-color: var(--accent); }
+      /* 라벨/원형이 수직 중앙 정렬되도록 라벨 플렉스 정렬 */
+      div[role="radiogroup"] label{
+        display:flex; align-items:center; gap:.5rem;
+        line-height:1.2; margin: .1rem 0;
+      }
+      /* 일부 환경에서 라디오 원이 1px 내려가 보이는 현상 보정 */
+      div[role="radiogroup"] input[type="radio"]{
+        transform: translateY(0px);
+      }
+
+      /* Buttons (sidebar/main 공통) */
+      section[data-testid="stSidebar"] .stButton>button,
+      [data-testid="stAppViewContainer"] .stButton>button{
+        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
+        color:#0f172a !important;
+        border:0!important; font-weight:800!important; letter-spacing:.2px;
+        border-radius:10px; padding:.55rem 1rem;
+      }
+      section[data-testid="stSidebar"] .stButton>button:hover,
+      [data-testid="stAppViewContainer"] .stButton>button:hover{
+        filter:brightness(1.05);
+      }
+
+      /* 이미지 여백 (겹침 방지) */
+      [data-testid="stImage"]{ margin:6px 0 18px!important; }
+      [data-testid="stImage"] img{ display:block; }
+
+        span[label="app main"] {
+      font-size: 0 !important;          /* 기존 글자 숨김 */
+      position: relative;
+  }
+  span[label="app main"]::after {
+      content: "메인";                  /* 원하는 표시 이름 */
+      font-size: 1rem !important;       /* 기본 폰트 크기로 복원 */
+      color: #fff !important;           /* 사이드바 글씨 색 (흰색) */
+      font-weight: 700 !important;      /* 굵게 */
+      position: absolute;
+      left: 0;
+      top: 0;
+  }
+
+        /* NumberInput - stepper 버튼 아이콘 색상 */
+      button[data-testid="stNumberInputStepUp"] svg,
+      button[data-testid="stNumberInputStepDown"] svg {
+          color: var(--sb-muted) !important;   /* 보조색 */
+          fill: var(--sb-muted) !important;    /* 일부 환경에서 필요 */
+      }
+
+      /* 버튼 자체 hover/focus 시에도 색 유지 */
+      button[data-testid="stNumberInputStepUp"]:hover svg,
+      button[data-testid="stNumberInputStepDown"]:hover svg {
+          color: var(--sb-muted) !important;
+          fill: var(--sb-muted) !important;
+      }
+
+            /* Selectbox: 선택된 값 텍스트 */
+      div[data-baseweb="select"] div[role="combobox"],
+      div[data-baseweb="select"] div[role="combobox"] input,
+      div[data-baseweb="select"] div[value] {
+          color: var(--sb-muted) !important;   /* 보조색 */
+          font-weight: 600 !important;         /* 조금 더 굵게 */
+      }
+
+      /* Selectbox: 드롭다운 아이콘 (열림/닫힘 화살표) */
+      div[data-baseweb="select"] svg {
+          color: var(--sb-muted) !important;
+          fill: var(--sb-muted) !important;
+      }
+
+      /* Hover 시에도 색 유지 */
+      div[data-baseweb="select"]:hover div[value],
+      div[data-baseweb="select"]:hover svg {
+          color: var(--sb-muted) !important;
+          fill: var(--sb-muted) !important;
+      }
+
+            /* 🔹 FileUploader 전체 영역 */
+      section[data-testid="stFileUploaderDropzone"] {
+          border: 2px dashed var(--sb-line) !important;
+          background: rgba(255,255,255,0.03) !important;
+          color: var(--sb-muted) !important;
+          border-radius: 10px !important;
+          padding: 12px !important;
+      }
+
+      /* 아이콘 색상 */
+      section[data-testid="stFileUploaderDropzone"] svg {
+          color: var(--sb-muted) !important;
+          fill: var(--sb-muted) !important;
+      }
+
+      /* 안내 텍스트 */
+      section[data-testid="stFileUploaderDropzone"] span {
+          color: var(--sb-muted) !important;
+          font-weight: 600 !important;
+      }
+
+      /* 버튼 */
+      section[data-testid="stFileUploaderDropzone"] button {
+          background: linear-gradient(180deg,var(--accent),var(--accent-2)) !important;
+          color: #001018 !important;
+          border: 0 !important;
+          font-weight: 700 !important;
+          border-radius: 8px !important;
+          padding: .4rem .9rem !important;
+      }
+      section[data-testid="stFileUploaderDropzone"] button:hover {
+          filter: brightness(1.05);
+      }
+
+            /* 계산하기 버튼 텍스트 색 변경 */
+      button[data-testid="stBaseButton-primary"] p {
+          color: var(--ink) !important;  /* 보조색 계열 */
+          font-weight: 700 !important;        /* 더 굵게 */
+      }
+
+     div[data-testid="stImageContainer"] {
+          margin-bottom: 2rem !important; /* 이미지+캡션 아래쪽 간격 */
+      }
+
+      /* 모든 stImage(도형, 미리보기 등) 출력은 강제로 블록 배치 */
+      div[data-testid="stImage"] {
+          display: block !important;
+          width: 100% !important;          /* 한 줄 전용 */
+          margin: 2rem auto !important;    /* 위/아래 넉넉히 띄움 */
+          text-align: center !important;   /* 중앙 정렬 */
+          z-index: 1 !important;           /* 텍스트보다 위 */
+          position: relative !important;   /* 겹침 방지 */
+      }
+
+      /* 이미지와 캡션 간격 */
+      div[data-testid="stImageCaption"] {
+          margin-top: 1rem !important;
       }
     </style>
-    """, unsafe_allow_html=True)
-    st.markdown(f"<div class='titlebar'><h1>{title}</h1>" + (f"<div class='sub'>{subtitle}</div>" if subtitle else "") + "</div>", unsafe_allow_html=True)
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+
 # --- end design refresh ---
 
-_design_refresh('바닥판 계산기', 'UI 정리 · 사이드바 유지')
+_design_refresh()
 
 
 import numpy as np
@@ -69,17 +227,19 @@ from PIL import Image, ImageDraw
 st.set_page_config(page_title="바닥판 규격/옵션 산출", layout="wide")
 
 st.sidebar.header("입력값 (왼쪽 인터페이스)")
-uploaded = st.sidebar.file_uploader("엑셀 업로드 (시트명: 바닥판)", type=["xlsx", "xls"])
+uploaded = st.sidebar.file_uploader(
+    "엑셀 업로드 (시트명: 바닥판)", type=["xlsx", "xls"]
+)
 
 units = st.sidebar.number_input("공사 세대수", min_value=1, step=1, value=100)
 
 st.sidebar.subheader("기본 조건")
 central = st.sidebar.radio("중앙배수 여부", ["No", "Yes"], horizontal=True)
-shape   = st.sidebar.radio("욕실 형태", ["사각형", "코너형"], horizontal=True)
-btype   = st.sidebar.radio("욕실 유형", ["샤워형", "욕조형", "구분없음"], horizontal=True)
+shape = st.sidebar.radio("욕실 형태", ["사각형", "코너형"], horizontal=True)
+btype = st.sidebar.radio("욕실 유형", ["샤워형", "욕조형", "구분없음"], horizontal=True)
 
 st.sidebar.subheader("치수 입력 (mm)")
-bw = st.sidebar.number_input("욕실 폭",  min_value=400, step=10, value=1500)
+bw = st.sidebar.number_input("욕실 폭", min_value=400, step=10, value=1500)
 bl = st.sidebar.number_input("욕실 길이", min_value=400, step=10, value=2200)
 
 # 세면/샤워 비활성 조건: 중앙배수 Yes 또는 유형 '구분없음'
@@ -87,25 +247,40 @@ disable_sink_shower = (central == "Yes") or (btype == "구분없음")
 
 col_ss1, col_ss2 = st.sidebar.columns(2)
 with col_ss1:
-    sw = st.sidebar.number_input("세면부 폭",  min_value=0, step=10, value=1300, disabled=disable_sink_shower)
+    sw = st.sidebar.number_input(
+        "세면부 폭", min_value=0, step=10, value=1300, disabled=disable_sink_shower
+    )
 with col_ss2:
-    sl = st.sidebar.number_input("세면부 길이", min_value=0, step=10, value=1500, disabled=disable_sink_shower)
+    sl = st.sidebar.number_input(
+        "세면부 길이", min_value=0, step=10, value=1500, disabled=disable_sink_shower
+    )
 
 col_sh1, col_sh2 = st.sidebar.columns(2)
 with col_sh1:
-    shw = st.sidebar.number_input("샤워부 폭",  min_value=0, step=10, value=800, disabled=disable_sink_shower)
+    shw = st.sidebar.number_input(
+        "샤워부 폭", min_value=0, step=10, value=800, disabled=disable_sink_shower
+    )
 with col_sh2:
-    shl = st.sidebar.number_input("샤워부 길이", min_value=0, step=10, value=900, disabled=disable_sink_shower)
+    shl = st.sidebar.number_input(
+        "샤워부 길이", min_value=0, step=10, value=900, disabled=disable_sink_shower
+    )
 
 # 비활성일 때는 None으로 전달 → 비교 생략
 if disable_sink_shower:
-    sw = None; sl = None; shw = None; shl = None
+    sw = None
+    sl = None
+    shw = None
+    shl = None
 
 st.sidebar.subheader("계산 옵션")
-mgmt_rate_pct = st.sidebar.number_input("생산관리비율 (%)", min_value=0.0, step=0.5, value=25.0)
+mgmt_rate_pct = st.sidebar.number_input(
+    "생산관리비율 (%)", min_value=0.0, step=0.5, value=25.0
+)
 mgmt_rate = mgmt_rate_pct / 100.0
 
-pve_kind = st.sidebar.radio("PVE 유형", ["일반형 (+380mm)", "주거약자 (+480mm)"], index=0)
+pve_kind = st.sidebar.radio(
+    "PVE 유형", ["일반형 (+380mm)", "주거약자 (+480mm)"], index=0
+)
 
 st.sidebar.write("---")
 do_calc = st.sidebar.button("계산하기", type="primary")
@@ -115,9 +290,20 @@ do_calc = st.sidebar.button("계산하기", type="primary")
 # 데이터 로딩 및 정규화
 # ---------------------------
 def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-    cols = ["소재","중앙배수","형태","유형","욕실폭","욕실길이",
-            "세면부폭","세면부길이","샤워부폭","샤워부길이","소계"]
-    extra = ["부재료","수량","단가1","노무비","단가2"]
+    cols = [
+        "소재",
+        "중앙배수",
+        "형태",
+        "유형",
+        "욕실폭",
+        "욕실길이",
+        "세면부폭",
+        "세면부길이",
+        "샤워부폭",
+        "샤워부길이",
+        "소계",
+    ]
+    extra = ["부재료", "수량", "단가1", "노무비", "단가2"]
     for c in cols:
         if c not in df.columns:
             df[c] = np.nan
@@ -125,15 +311,25 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     df["형태"] = df["형태"].replace({"샤각형": "사각형"}).fillna("")
     df["유형"] = df["유형"].replace({"샤워": "샤워형"}).fillna("")
     df["중앙배수"] = df["중앙배수"].astype(str).str.strip().str.title()
-    df["중앙배수"] = df["중앙배수"].replace({"Y": "Yes", "N": "No", "Yes": "Yes", "No": "No"})
+    df["중앙배수"] = df["중앙배수"].replace(
+        {"Y": "Yes", "N": "No", "Yes": "Yes", "No": "No"}
+    )
 
-    num_cols = ["욕실폭","욕실길이","세면부폭","세면부길이","샤워부폭","샤워부길이","소계"] + \
-               [c for c in extra if c in df.columns]
+    num_cols = [
+        "욕실폭",
+        "욕실길이",
+        "세면부폭",
+        "세면부길이",
+        "샤워부폭",
+        "샤워부길이",
+        "소계",
+    ] + [c for c in extra if c in df.columns]
     for c in num_cols:
         df[c] = (
-            df[c].astype(str)
-                 .str.replace(",", "", regex=False)
-                 .replace({"nan": np.nan, "NaN": np.nan, "None": np.nan, "": np.nan})
+            df[c]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .replace({"nan": np.nan, "NaN": np.nan, "None": np.nan, "": np.nan})
         )
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
@@ -141,6 +337,7 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def is_nan(x) -> bool:
     return pd.isna(x)
+
 
 # ----- 정확 일치 비교 도우미 -----
 def exact_eq(a: Optional[float], b: Optional[float]) -> bool:
@@ -151,10 +348,12 @@ def exact_eq(a: Optional[float], b: Optional[float]) -> bool:
     except Exception:
         return False
 
+
 def exact_eq_series(s: pd.Series, value: Optional[float]) -> pd.Series:
     if value is None:
         return pd.Series(True, index=s.index)  # 입력이 None이면 조건 생략
     return (~s.isna()) & (s.astype(float) == float(value))
+
 
 # 입력이 None이면 조건 생략 (정확 일치)
 def optional_eq_series(s: pd.Series, value: Optional[float]) -> pd.Series:
@@ -166,14 +365,16 @@ def optional_eq_series(s: pd.Series, value: Optional[float]) -> pd.Series:
 # ---------------------------
 # PVE 계산
 # ---------------------------
-def pve_quote(width_mm: int, length_mm: int, mgmt_rate: float, kind: str = "일반형") -> Dict[str, Any]:
+def pve_quote(
+    width_mm: int, length_mm: int, mgmt_rate: float, kind: str = "일반형"
+) -> Dict[str, Any]:
     add = 380 if "일반" in kind else 480
     w_m = (width_mm + add) / 1000.0
     l_m = (length_mm + add) / 1000.0
     area = w_m * l_m
-    raw = round(area * 12000)       # 원재료비
-    process = 24331                 # 가공비
-    subtotal = raw + process        # 소계
+    raw = round(area * 12000)  # 원재료비
+    process = 24331  # 가공비
+    subtotal = raw + process  # 소계
     subtotal_mgmt = round(subtotal * (1.0 + mgmt_rate))
     return {
         "소재": "PVE",
@@ -182,15 +383,16 @@ def pve_quote(width_mm: int, length_mm: int, mgmt_rate: float, kind: str = "일�
         "소계": int(subtotal),
         "관리비율": mgmt_rate,
         "관리비포함소계": int(subtotal_mgmt),
-        "설명": f"PVE({kind}) 계산: (W+{add})*(L+{add}), 면적×12000 + 24331 후 관리비율 적용"
+        "설명": f"PVE({kind}) 계산: (W+{add})*(L+{add}), 면적×12000 + 24331 후 관리비율 적용",
     }
 
 
 # ---------------------------
 # 매칭 함수들 (모두 dict 또는 None 반환)
 # ---------------------------
-def match_center_drain(df: pd.DataFrame, shape: str, btype: str,
-                       bw: int, bl: int) -> Optional[Dict[str, Any]]:
+def match_center_drain(
+    df: pd.DataFrame, shape: str, btype: str, bw: int, bl: int
+) -> Optional[Dict[str, Any]]:
     """중앙배수 Yes: GRP(중앙배수 계열)만 매칭"""
     C = (df["중앙배수"] == "Yes") & (df["형태"] == shape) & (df["유형"] == btype)
     sub = df[C & df["소재"].str.startswith("GRP", na=False)]
@@ -202,15 +404,25 @@ def match_center_drain(df: pd.DataFrame, shape: str, btype: str,
     return {"row": row, "소재": "GRP(중앙배수)", "단차없음": False}
 
 
-def match_non_center_rectangle(df: pd.DataFrame, btype: str, bw: int, bl: int,
-                               sw: Optional[int], sl: Optional[int],
-                               shw: Optional[int], shl: Optional[int]) -> Optional[Dict[str, Any]]:
+def match_non_center_rectangle(
+    df: pd.DataFrame,
+    btype: str,
+    bw: int,
+    bl: int,
+    sw: Optional[int],
+    sl: Optional[int],
+    shw: Optional[int],
+    shl: Optional[int],
+) -> Optional[Dict[str, Any]]:
     """중앙배수 No & 사각형 정책"""
     base = df[(df["중앙배수"] == "No") & (df["형태"] == "사각형")]
 
     # A) 구분없음: GRP만 W/L 매칭
     if btype == "구분없음":
-        grp = base[(base["유형"] == "구분없음") & (base["소재"].str.startswith("GRP", na=False))]
+        grp = base[
+            (base["유형"] == "구분없음")
+            & (base["소재"].str.startswith("GRP", na=False))
+        ]
         cond = exact_eq_series(grp["욕실폭"], bw) & exact_eq_series(grp["욕실길이"], bl)
         hit = grp[cond]
         if hit.empty:
@@ -224,7 +436,9 @@ def match_non_center_rectangle(df: pd.DataFrame, btype: str, bw: int, bl: int,
         # 특수규격(단차없음)
         special = {(1200, 1900), (1400, 1900)}
         if (bw, bl) in special:
-            cond = exact_eq_series(frp["욕실폭"], bw) & exact_eq_series(frp["욕실길이"], bl)
+            cond = exact_eq_series(frp["욕실폭"], bw) & exact_eq_series(
+                frp["욕실길이"], bl
+            )
             hit = frp[cond]
             if hit.empty:
                 return None
@@ -232,12 +446,12 @@ def match_non_center_rectangle(df: pd.DataFrame, btype: str, bw: int, bl: int,
             return {"row": row, "소재": "FRP", "단차없음": True}
 
         cond = (
-            exact_eq_series(frp["욕실폭"],   bw)  &
-            exact_eq_series(frp["욕실길이"], bl)  &
-            optional_eq_series(frp["세면부폭"],   sw)  &
-            optional_eq_series(frp["세면부길이"], sl)  &
-            optional_eq_series(frp["샤워부폭"],   shw) &
-            optional_eq_series(frp["샤워부길이"], shl)
+            exact_eq_series(frp["욕실폭"], bw)
+            & exact_eq_series(frp["욕실길이"], bl)
+            & optional_eq_series(frp["세면부폭"], sw)
+            & optional_eq_series(frp["세면부길이"], sl)
+            & optional_eq_series(frp["샤워부폭"], shw)
+            & optional_eq_series(frp["샤워부길이"], shl)
         )
         hit = frp[cond]
         if hit.empty:
@@ -249,12 +463,12 @@ def match_non_center_rectangle(df: pd.DataFrame, btype: str, bw: int, bl: int,
     if btype == "욕조형":
         frp = base[(base["유형"] == "욕조형") & (base["소재"] == "FRP")]
         cond = (
-            exact_eq_series(frp["욕실폭"],   bw)  &
-            exact_eq_series(frp["욕실길이"], bl)  &
-            optional_eq_series(frp["세면부폭"],   sw)  &
-            optional_eq_series(frp["세면부길이"], sl)  &
-            optional_eq_series(frp["샤워부폭"],   shw) &
-            optional_eq_series(frp["샤워부길이"], shl)
+            exact_eq_series(frp["욕실폭"], bw)
+            & exact_eq_series(frp["욕실길이"], bl)
+            & optional_eq_series(frp["세면부폭"], sw)
+            & optional_eq_series(frp["세면부길이"], sl)
+            & optional_eq_series(frp["샤워부폭"], shw)
+            & optional_eq_series(frp["샤워부길이"], shl)
         )
         hit = frp[cond]
         if hit.empty:
@@ -265,21 +479,27 @@ def match_non_center_rectangle(df: pd.DataFrame, btype: str, bw: int, bl: int,
     return None
 
 
-def match_corner_shower(df: pd.DataFrame, bw: int, bl: int,
-                        sw: Optional[int], sl: Optional[int],
-                        shw: Optional[int], shl: Optional[int]) -> Optional[Dict[str, Any]]:
+def match_corner_shower(
+    df: pd.DataFrame,
+    bw: int,
+    bl: int,
+    sw: Optional[int],
+    sl: Optional[int],
+    shw: Optional[int],
+    shl: Optional[int],
+) -> Optional[Dict[str, Any]]:
     """중앙배수 No & 코너형 & 샤워형: GRP→FRP"""
     C = (df["형태"] == "코너형") & (df["유형"] == "샤워형") & (df["중앙배수"] == "No")
 
     # 1) GRP
     grp = df[C & df["소재"].str.startswith("GRP", na=False)]
     cond_grp = (
-        exact_eq_series(grp["욕실폭"],   bw)  &
-        exact_eq_series(grp["욕실길이"], bl)  &
-        optional_eq_series(grp["세면부폭"],   sw)  &
-        optional_eq_series(grp["세면부길이"], sl)  &
-        optional_eq_series(grp["샤워부폭"],   shw) &
-        optional_eq_series(grp["샤워부길이"], shl)
+        exact_eq_series(grp["욕실폭"], bw)
+        & exact_eq_series(grp["욕실길이"], bl)
+        & optional_eq_series(grp["세면부폭"], sw)
+        & optional_eq_series(grp["세면부길이"], sl)
+        & optional_eq_series(grp["샤워부폭"], shw)
+        & optional_eq_series(grp["샤워부길이"], shl)
     )
     hit = grp[cond_grp]
     if not hit.empty:
@@ -289,12 +509,12 @@ def match_corner_shower(df: pd.DataFrame, bw: int, bl: int,
     # 2) FRP
     frp = df[C & (df["소재"] == "FRP")]
     cond_frp = (
-        exact_eq_series(frp["욕실폭"],   bw)  &
-        exact_eq_series(frp["욕실길이"], bl)  &
-        optional_eq_series(frp["세면부폭"],   sw)  &
-        optional_eq_series(frp["세면부길이"], sl)  &
-        optional_eq_series(frp["샤워부폭"],   shw) &
-        optional_eq_series(frp["샤워부길이"], shl)
+        exact_eq_series(frp["욕실폭"], bw)
+        & exact_eq_series(frp["욕실길이"], bl)
+        & optional_eq_series(frp["세면부폭"], sw)
+        & optional_eq_series(frp["세면부길이"], sl)
+        & optional_eq_series(frp["샤워부폭"], shw)
+        & optional_eq_series(frp["샤워부길이"], shl)
     )
     hit = frp[cond_frp]
     if not hit.empty:
@@ -307,13 +527,17 @@ def match_corner_shower(df: pd.DataFrame, bw: int, bl: int,
 # ---------------------------
 # 도형 렌더링 (PIL, 약 1/3 화면 크기)
 # ---------------------------
-def draw_bathroom(shape: str,
-                  bw_mm: int, bl_mm: int,                 # 욕실 폭(세로), 욕실 길이(가로)
-                  sw_mm: int | None, sl_mm: int | None,   # 세면부 폭/길이
-                  shw_mm: int | None, shl_mm: int | None, # 샤워부 폭/길이
-                  central: str | None = None,              # "Yes"/"No"
-                  btype: str | None = None                 # "샤워형"/"욕조형"/"구분없음"
-                  ) -> Image.Image:
+def draw_bathroom(
+    shape: str,
+    bw_mm: int,
+    bl_mm: int,  # 욕실 폭(세로), 욕실 길이(가로)
+    sw_mm: int | None,
+    sl_mm: int | None,  # 세면부 폭/길이
+    shw_mm: int | None,
+    shl_mm: int | None,  # 샤워부 폭/길이
+    central: str | None = None,  # "Yes"/"No"
+    btype: str | None = None,  # "샤워형"/"욕조형"/"구분없음"
+) -> Image.Image:
     """
     렌더 규칙
     - 중앙배수=Yes 또는 유형=구분없음 → 외곽 사각형만 그림(내부 구획 생략)
@@ -396,7 +620,7 @@ def draw_bathroom(shape: str,
             tx0 = max(x0 + BORDER, tx1 - sh_w)
             ty0 = max(y0 + BORDER, ty1 - sh_h)
             # 세면부와 겹치면 우측으로 한 칸 밀어줌
-            if 'sx1' in locals() and tx0 < (sx1 + GAP):
+            if "sx1" in locals() and tx0 < (sx1 + GAP):
                 tx0 = min(tx1 - 1, sx1 + GAP)
             if safe_rect(tx0, ty0, tx1, ty1, "red", 3):
                 text_center((tx0 + tx1) / 2, (ty0 + ty1) / 2, "샤워부", "red")
@@ -417,7 +641,11 @@ def draw_bathroom(shape: str,
             text_center((left_x0 + left_x1) / 2, (y0 + y1) / 2, "세면부", "blue")
 
     # 경계선(전고)
-    ImageDraw.Draw(img).line([boundary_x, y0 + BORDER // 2, boundary_x, y1 - BORDER // 2], fill="red", width=3)
+    ImageDraw.Draw(img).line(
+        [boundary_x, y0 + BORDER // 2, boundary_x, y1 - BORDER // 2],
+        fill="red",
+        width=3,
+    )
 
     # 샤워부(우측, 90° 회전: 가로=샤워부 '길이', 세로=샤워부 '폭')
     if shw > 0 and shl > 0:
@@ -440,7 +668,9 @@ def draw_bathroom(shape: str,
 st.title("바닥판 규격/옵션 산출")
 
 if not uploaded:
-    st.info("왼쪽에서 엑셀 파일(시트명: **바닥판**)을 업로드한 뒤, **계산하기**를 눌러주세요.")
+    st.info(
+        "왼쪽에서 엑셀 파일(시트명: **바닥판**)을 업로드한 뒤, **계산하기**를 눌러주세요."
+    )
     st.stop()
 
 # 엑셀 로딩
@@ -493,7 +723,9 @@ if do_calc:
         else:
             if shape == "사각형":
                 decision_log.append("중앙배수=No & 형태=사각형")
-                matched = match_non_center_rectangle(df, btype, bw, bl, sw, sl, shw, shl)
+                matched = match_non_center_rectangle(
+                    df, btype, bw, bl, sw, sl, shw, shl
+                )
                 if matched is None:
                     decision_log.append("사각형 매칭 실패 → PVE 계산")
                     q = pve_quote(bw, bl, mgmt_rate, pve_kind)
@@ -505,10 +737,14 @@ if do_calc:
                     row = matched["row"]
                     material = matched["소재"]
                     base_subtotal = int(row["소계"])
-                    result_kind = f"{material}" + (" (단차없음)" if matched.get("단차없음") else "")
+                    result_kind = f"{material}" + (
+                        " (단차없음)" if matched.get("단차없음") else ""
+                    )
                     decision_log.append(f"{result_kind} 매칭 성공 → 최소 소계 선택")
             else:
-                decision_log.append("중앙배수=No & 형태=코너형 & 유형=샤워형 → GRP→FRP 순서")
+                decision_log.append(
+                    "중앙배수=No & 형태=코너형 & 유형=샤워형 → GRP→FRP 순서"
+                )
                 matched = match_corner_shower(df, bw, bl, sw, sl, shw, shl)
                 if matched is None:
                     decision_log.append("코너형/샤워형 매칭 실패 → PVE 계산")
@@ -527,7 +763,6 @@ if do_calc:
         # 공통: 관리비 포함 소계(매칭 케이스에도 적용)
         mgmt_total = int(round(base_subtotal * (1.0 + mgmt_rate)))
 
-
     # ---------------------------
     # 출력
     # ---------------------------
@@ -536,12 +771,15 @@ if do_calc:
     with left:
         img = draw_bathroom(shape, bw, bl, sw, sl, shw, shl, central, btype)
         st.image(img, caption="욕실 도형(약 1/3 크기)", width=480)
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
     with right:
         st.subheader("선택된 바닥판")
         st.write(f"**재질**: {result_kind}")
         st.write(f"**소계(원)**: {base_subtotal:,}")
-        st.write(f"**관리비 포함 소계(원)**: {mgmt_total:,}  (관리비율 {mgmt_rate_pct:.1f}%)")
+        st.write(
+            f"**관리비 포함 소계(원)**: {mgmt_total:,}  (관리비율 {mgmt_rate_pct:.1f}%)"
+        )
 
         st.info("결정 과정", icon="ℹ️")
         st.write("\n".join([f"- {x}" for x in decision_log]))

@@ -12,6 +12,72 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 
+
+def _sidebar_dark_and_slider_fix():
+    st.markdown(
+        """
+    <style>
+      :root{
+        --sb-bg:#0b1220; --sb-fg:#e2e8f0; --sb-muted:#cbd5e1; --sb-line:#1f2a44;
+        --accent:#22d3ee; --accent-2:#06b6d4;
+      }
+      /* Sidebar dark */
+      section[data-testid="stSidebar"]{
+        background:var(--sb-bg)!important; color:var(--sb-fg)!important;
+        border-right:1px solid var(--sb-line);
+      }
+      section[data-testid="stSidebar"] *{ color:var(--sb-fg)!important; }
+      section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h2,section[data-testid="stSidebar"] h3{
+        color:var(--sb-fg)!important;
+      }
+      /* 보조 텍스트(라벨) 더 선명 + 굵게 */
+      section[data-testid="stSidebar"] .stMarkdown p,
+      section[data-testid="stSidebar"] label,
+      section[data-testid="stSidebar"] .stSelectbox label{
+        color:var(--sb-muted)!important; font-weight:600!important;
+      }
+      /* Inputs */
+      section[data-testid="stSidebar"] input, section[data-testid="stSidebar"] textarea,
+      section[data-testid="stSidebar"] select,
+      section[data-testid="stSidebar"] .stTextInput input,
+      section[data-testid="stSidebar"] .stNumberInput input{
+        background:rgba(255,255,255,0.06)!important; border:1px solid var(--sb-line)!important;
+      }
+      /* Sidebar buttons */
+      section[data-testid="stSidebar"] .stButton>button{
+        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
+        color:#001018!important; border:0!important; font-weight:800!important; letter-spacing:.2px;
+      }
+      section[data-testid="stSidebar"] .stButton>button:hover{ filter:brightness(1.05); }
+
+      /* Slider cutoff fix */
+      section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ padding-right:12px; }
+      section[data-testid="stSidebar"] div[data-testid="stSlider"]{
+        padding-right:12px; margin-right:2px; overflow:visible;
+      }
+      section[data-testid="stSidebar"] div[role="slider"]{
+        box-shadow:0 0 0 2px rgba(34,211,238,0.25); border-radius:999px;
+      }
+
+      /* Main buttons also themed */
+      [data-testid="stAppViewContainer"] .stButton>button{
+        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
+        color:#001018!important; border:0!important; font-weight:800!important; letter-spacing:.2px;
+      }
+      [data-testid="stAppViewContainer"] .stButton>button:hover{ filter:brightness(1.05); }
+
+      /* Images breathing room (겹침 방지) */
+      [data-testid="stImage"]{ margin:6px 0 18px!important; }
+      [data-testid="stImage"] img{ display:block; }
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+
+# call once
+_sidebar_dark_and_slider_fix()
+
 # ---------------------------------------
 # 환경설정
 # ---------------------------------------
@@ -43,6 +109,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**파일 업로드 후, [인덱스 생성]을 눌러주세요.**")
 
+
 # ---------------------------------------
 # 공용: 업로드 파일을 임시경로로 저장
 # ---------------------------------------
@@ -55,6 +122,7 @@ def _save_uploaded_to_temp(uploaded_file, suffix):
         return tmp.name
     finally:
         tmp.close()
+
 
 # ---------------------------------------
 # 함수: 문서 로딩 (PDF/Text 모두 임시경로 경유)
@@ -91,6 +159,7 @@ def load_docs(uploaded_files):
 
     return docs
 
+
 # ---------------------------------------
 # 함수: 청크 분할
 # ---------------------------------------
@@ -101,6 +170,7 @@ def split_docs(docs, chunk_size=1000, chunk_overlap=150):
         separators=["\n\n", "\n", " ", ""],
     )
     return splitter.split_documents(docs)
+
 
 # ---------------------------------------
 # 시스템 프롬프트 (욕실 공사 시방서 전용)
@@ -117,7 +187,9 @@ SYSTEM_INSTRUCTIONS = """\
 USER_PROMPT = ChatPromptTemplate.from_messages(
     [
         ("system", SYSTEM_INSTRUCTIONS),
-        ("human", """\
+        (
+            "human",
+            """\
 다음은 검색된 시방서 컨텍스트입니다. 이를 참고하여 질문에 답하라.
 
 [컨텍스트]
@@ -133,7 +205,8 @@ USER_PROMPT = ChatPromptTemplate.from_messages(
 - 문서 근거의 핵심 문구를 인용(요약)하고, 가능한 경우 페이지/섹션을 함께 제시.
 - 모호하면 명시적으로 '해당사항 없음' 기재.
 - 최종에 '요약' 섹션으로 3줄 이내 핵심만 재정리.
-"""),
+""",
+        ),
     ]
 )
 
@@ -143,7 +216,8 @@ USER_PROMPT = ChatPromptTemplate.from_messages(
 st.subheader("1) 시방서 업로드")
 uploaded = st.file_uploader(
     "PDF(.pdf) 또는 텍스트(.txt/.md) 시방서를 업로드하세요 (복수 가능)",
-    type=["pdf", "txt", "md"], accept_multiple_files=True
+    type=["pdf", "txt", "md"],
+    accept_multiple_files=True,
 )
 
 col_a, col_b = st.columns(2)
@@ -154,7 +228,9 @@ with col_a:
         else:
             with st.spinner("문서 로딩/청크 분할/임베딩 중..."):
                 raw_docs = load_docs(uploaded)
-                chunks = split_docs(raw_docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+                chunks = split_docs(
+                    raw_docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+                )
                 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
                 vs = FAISS.from_documents(chunks, embeddings)
                 st.session_state["vectorstore"] = vs
@@ -166,13 +242,13 @@ with col_b:
         st.session_state["chat_history"] = []
         st.success("초기화 완료.")
 
+
 # ---------------------------------------
 # RAG 체인 구성
 # ---------------------------------------
 def make_rag_chain(vectorstore):
     retriever = vectorstore.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": k_ctx, "fetch_k": max(10, k_ctx * 4)}
+        search_type="mmr", search_kwargs={"k": k_ctx, "fetch_k": max(10, k_ctx * 4)}
     )
     llm = ChatOpenAI(model=model_name)
 
@@ -181,7 +257,9 @@ def make_rag_chain(vectorstore):
         for d in docs:
             src_path = d.metadata.get("source", "")
             page = d.metadata.get("page", None)
-            disp = d.metadata.get("display_name", os.path.basename(src_path) or "document")
+            disp = d.metadata.get(
+                "display_name", os.path.basename(src_path) or "document"
+            )
             head = f"[source: {disp}"
             if page is not None:
                 head += f", page: {page+1}"
@@ -201,11 +279,14 @@ def make_rag_chain(vectorstore):
     )
     return rag, retriever
 
+
 # ---------------------------------------
 # 질의 영역
 # ---------------------------------------
 st.subheader("2) 질문하기")
-q = st.text_input("시방서 관련 질문을 입력하세요 (예: 'UBR 공사에서 벽체 타일 규격은?')")
+q = st.text_input(
+    "시방서 관련 질문을 입력하세요 (예: 'UBR 공사에서 벽체 타일 규격은?')"
+)
 
 if st.session_state["vectorstore"] is None:
     st.info("먼저 시방서를 업로드하고 인덱스를 생성하세요.")
@@ -219,12 +300,20 @@ else:
 
             # Runnable 바깥에서 안전하게 chat_history 문자열 생성
             chat_history_str = (
-                "\n".join([f"Q: {qq}\nA: {aa}" for qq, aa in st.session_state["chat_history"]][-6:])
-                if st.session_state["chat_history"] else "없음"
+                "\n".join(
+                    [
+                        f"Q: {qq}\nA: {aa}"
+                        for qq, aa in st.session_state["chat_history"]
+                    ][-6:]
+                )
+                if st.session_state["chat_history"]
+                else "없음"
             )
 
             # 체인에 명시적으로 입력 전달
-            answer_msg = rag_chain.invoke({"question": q, "chat_history": chat_history_str})
+            answer_msg = rag_chain.invoke(
+                {"question": q, "chat_history": chat_history_str}
+            )
 
         # 히스토리 저장
         st.session_state["chat_history"].append((q, answer_msg.content))
@@ -237,9 +326,16 @@ else:
             for i, d in enumerate(docs, 1):
                 src_path = d.metadata.get("source", "")
                 page = d.metadata.get("page", None)
-                disp = d.metadata.get("display_name", os.path.basename(src_path) or "document")
-                st.markdown(f"**[{i}] {disp}**  (page: {page+1 if page is not None else 'N/A'})")
-                st.write(d.page_content[:1200] + ("..." if len(d.page_content) > 1200 else ""))
+                disp = d.metadata.get(
+                    "display_name", os.path.basename(src_path) or "document"
+                )
+                st.markdown(
+                    f"**[{i}] {disp}**  (page: {page+1 if page is not None else 'N/A'})"
+                )
+                st.write(
+                    d.page_content[:1200]
+                    + ("..." if len(d.page_content) > 1200 else "")
+                )
 
 # ---------------------------------------
 # 히스토리 표시
@@ -250,5 +346,3 @@ if st.session_state["chat_history"]:
     for i, (qq, aa) in enumerate(reversed(st.session_state["chat_history"][-8:]), 1):
         st.markdown(f"**Q{i}.** {qq}")
         st.markdown(f"**A{i}.** {aa}")
-
-

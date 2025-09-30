@@ -6,6 +6,18 @@ from typing import Optional, Dict, Any
 # --- design refresh (prettier inline) ---
 import streamlit as st
 
+# --- Floor/Walls 연동용 상태키 ---
+FLOOR_DONE_KEY = "floor_done"
+FLOOR_RESULT_KEY = "floor_result"
+
+
+def _init_state():
+    st.session_state.setdefault(FLOOR_DONE_KEY, False)
+    st.session_state.setdefault(FLOOR_RESULT_KEY, None)
+
+
+_init_state()
+
 
 def _design_refresh():
 
@@ -204,8 +216,30 @@ def _design_refresh():
       div[data-testid="stImageCaption"] {
           margin-top: 1rem !important;
       }
+
+    /* 사이드바 Alert 전용 스타일 */
+    section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] {
+        background: transparent !important;   /* 배경 무채색 */
+        border: 1px solid #555 !important;
+        color: #e2e2e2 !important;        /* 텍스트 색 */
+        border-radius: 6px !important;
+        padding: 0.6rem !important;
+    }
+
+    /* 내부 텍스트/아이콘은 상위 색을 따르도록 */
+    section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] * {
+        color: inherit !important;
+        fill: inherit !important;
+    }
+
+    /* 아이콘만 살짝 연한 회색 */
+    section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] svg {
+        color: #bbb !important;
+        fill: #bbb !important;
+    }
+
     </style>
-    </style>
+
     """,
         unsafe_allow_html=True,
     )
@@ -271,6 +305,28 @@ if disable_sink_shower:
     sl = None
     shw = None
     shl = None
+
+# --- 샤워부 1000×900 예외처리 UI (유효값으로만 반영) ---
+EXC_KEY = "exc_1000_900_choice"
+
+# 기본 유효값은 입력값 그대로
+shw_eff, shl_eff = shw, shl
+exception_applied = False
+
+if (not disable_sink_shower) and (shw is not None) and (shl is not None):
+    if shw == 1000 and shl == 900:
+        st.sidebar.warning(
+            "샤워부 1000×900은 예외 규격으로 사용될 수 있습니다. 900×1000으로 간주할까요?"
+        )
+        choice = st.sidebar.radio(
+            "예외처리",
+            ["원래값 유지 (1000×900)", "예외 적용 (900×1000)"],
+            key=EXC_KEY,
+            horizontal=False,
+        )
+        if "예외 적용" in choice:
+            shw_eff, shl_eff = 900, 1000
+            exception_applied = True
 
 st.sidebar.subheader("계산 옵션")
 mgmt_rate_pct = st.sidebar.number_input(
@@ -685,6 +741,19 @@ df = normalize_df(raw)
 if do_calc:
     decision_log = []
 
+    if exception_applied:
+        decision_log.append("샤워부 1000×900 → 예외규칙 적용으로 900×1000 간주")
+    elif (
+        (not disable_sink_shower)
+        and (shw is not None)
+        and (shl is not None)
+        and shw == 1000
+        and shl == 900
+    ):
+        decision_log.append(
+            "샤워부 1000×900 감지됨(예외 규격) → 사이드바에서 적용 여부 선택 가능"
+        )
+
     # (선택) 샤워부 1000×900 → 900×1000으로 정확 일치 교정이 필요하다면 아래 주석 해제
     # if (not disable_sink_shower) and (shw is not None) and (shl is not None):
     #     if exact_eq(shw, 1000) and exact_eq(shl, 900):
@@ -724,7 +793,7 @@ if do_calc:
             if shape == "사각형":
                 decision_log.append("중앙배수=No & 형태=사각형")
                 matched = match_non_center_rectangle(
-                    df, btype, bw, bl, sw, sl, shw, shl
+                    df, btype, bw, bl, sw, sl, shw_eff, shl_eff
                 )
                 if matched is None:
                     decision_log.append("사각형 매칭 실패 → PVE 계산")
@@ -745,7 +814,15 @@ if do_calc:
                 decision_log.append(
                     "중앙배수=No & 형태=코너형 & 유형=샤워형 → GRP→FRP 순서"
                 )
-                matched = match_corner_shower(df, bw, bl, sw, sl, shw, shl)
+                matched = match_corner_shower(
+                    df,
+                    bw,
+                    bl,
+                    sw,
+                    sl,
+                    shw_eff,
+                    shl_eff,
+                )
                 if matched is None:
                     decision_log.append("코너형/샤워형 매칭 실패 → PVE 계산")
                     q = pve_quote(bw, bl, mgmt_rate, pve_kind)
@@ -769,7 +846,7 @@ if do_calc:
     left, right = st.columns([1, 2], vertical_alignment="top")
 
     with left:
-        img = draw_bathroom(shape, bw, bl, sw, sl, shw, shl, central, btype)
+        img = draw_bathroom(shape, bw, bl, sw, sl, shw_eff, shl_eff, central, btype)
         st.image(img, caption="욕실 도형(약 1/3 크기)", width=480)
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
@@ -783,5 +860,51 @@ if do_calc:
 
         st.info("결정 과정", icon="ℹ️")
         st.write("\n".join([f"- {x}" for x in decision_log]))
+
+        st.markdown("---")
+        b1, b2, b3 = st.columns([1, 1, 2])
+
+        def _save_done():
+            # 바닥 결과 요약 저장 (벽 페이지에서 활용할 수 있도록 최소 정보만)
+            st.session_state[FLOOR_RESULT_KEY] = {
+                "material": result_kind,
+                "subtotal": int(base_subtotal),
+                "subtotal_with_mgmt": int(mgmt_total),
+                "inputs": {
+                    "central": central,
+                    "shape": shape,
+                    "btype": btype,
+                    "bw": int(bw),
+                    "bl": int(bl),
+                    "sw": (None if sw is None else int(sw)),
+                    "sl": (None if sl is None else int(sl)),
+                    "shw": (None if shw_eff is None else int(shw_eff)),
+                    "shl": (None if shl_eff is None else int(shl_eff)),
+                    "mgmt_rate_pct": float(mgmt_rate_pct),
+                    "pve_kind": pve_kind,
+                    "units": int(units),
+                },
+            }
+            st.session_state[FLOOR_DONE_KEY] = True
+            st.success("바닥 계산 결과를 저장했습니다. (다음 단계로 이동 가능)")
+
+        def _reset_done():
+            st.session_state[FLOOR_DONE_KEY] = False
+            st.session_state[FLOOR_RESULT_KEY] = None
+            st.info("저장 상태를 초기화했습니다.")
+
+        with b1:
+            st.button("✅ 완료 저장", on_click=_save_done, type="primary")
+        with b2:
+            st.button("↩️ 초기화", on_click=_reset_done)
+
+        with b3:
+            # 프로그램적으로 벽 페이지로 이동 (Streamlit 1.25+)
+            go_wall = st.button("➡️ 벽 계산기로 이동", help="저장 후 이동을 권장")
+            if go_wall:
+                try:
+                    st.switch_page("pages/original_wall.py")
+                except Exception:
+                    st.info("좌측 네비게이션에서 ‘벽판 계산’ 페이지로 이동해주세요.")
 
     st.success("계산 완료 ✅")

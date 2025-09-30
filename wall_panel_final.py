@@ -7,6 +7,10 @@ from typing import Dict, List, Tuple, Optional
 # --- design refresh (prettier inline) ---
 import streamlit as st
 
+if not st.session_state.get("floor_done", False):
+    st.warning("먼저 바닥 계산 페이지에서 **완료 저장**을 해주세요.")
+    st.stop()
+
 
 def _design_refresh(title: str, subtitle: str = ""):
     try:

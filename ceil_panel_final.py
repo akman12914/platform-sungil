@@ -5,7 +5,40 @@ import itertools
 import re, unicodedata, difflib
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
+import os, json
+from datetime import datetime
+EXPORT_DIR = "exports"
+os.makedirs(EXPORT_DIR, exist_ok=True)
 
+def _save_json(path: str, data: dict):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+def candidate_to_dict(c: Candidate) -> Dict[str, Any]:
+    return {
+        "pattern": list(c.pattern),
+        "oriented": [
+            {
+                "kind": o.panel.kind,
+                "name": o.panel.name,
+                "cw": o.cw,
+                "cl": o.cl,
+                "rotated": o.rotated,
+                "panel": {
+                    "name": o.panel.name,
+                    "kind": o.panel.kind,
+                    "width": o.panel.width,
+                    "length": o.panel.length,
+                    "price": o.panel.price,
+                },
+            }
+            for o in c.oriented
+        ],
+        "width_cuts": list(c.width_cuts),
+        "length_cut_last": int(c.length_cut_last),
+        "material_cost": int(c.material_cost),
+        "cut_cost": int(c.cut_cost),
+        "total_cost": int(c.total_cost),
+    }
 
 # --- design refresh (prettier inline) ---
 import streamlit as st
@@ -172,6 +205,17 @@ MGMT_RATIO_DEFAULT = 25.0
 DOUBLE_CHECK_NAMES = {"SI-7", "SI-8", "SI-9"}  # 점검구 ×2 자동 적용
 MAX_RECT_CANVAS_W = 540  # 화면 1/3 정도
 MAX_RECT_CANVAS_H = 360
+
+
+FLOOR_DONE_KEY = "floor_done"
+FLOOR_RESULT_KEY = "floor_result"
+
+WALL_DONE_KEY  = "wall_done"
+WALL_RESULT_KEY = "wall_result"
+
+CEIL_DONE_KEY  = "ceil_done"
+CEIL_RESULT_KEY = "ceil_result"
+
 
 
 # =========================================================
@@ -1000,6 +1044,29 @@ if mode == "사각형":
         chk_txt = f"{chk_each:,}원" + (" ×2" if chk_double else "")
         st.write(f"**점검구(바디와 동일 모델)**: {chk_txt}")
         st.success(f"**관리비 포함 합계**: {res['mgmt_total']:,}원")
+    # ====== 자동저장: 천장 결과를 session_state에 기록 ======
+    try:
+        st.session_state[CEIL_RESULT_KEY] = {
+            "section": "ceil",
+            "inputs": {
+                "mode": mode,
+                "W": int(W), "L": int(L),
+                "Wc": int(Wc), "Lc": int(Lc),
+                "cut_cost": int(cut_cost),
+                "mgmt_ratio_pct": float(mgmt_ratio_pct),
+            },
+            "result": {
+                "status": res.get("status"),
+                "message": res.get("message"),
+                "best": res.get("best", {}),
+                "detail_best": (candidate_to_dict(res["detail_best"]) if "detail_best" in res else {}),
+                "summary": res.get("summary", {}),
+            },
+        }
+        st.success("천장 결과 자동저장 완료")
+    except Exception as _e:
+        st.warning(f"천장 결과 자동저장 중 오류: {_e}")
+
 
     st.subheader("상위 후보 (총비용 오름차순)")
     st.dataframe(pd.DataFrame(res["top"]), use_container_width=True)
@@ -1059,3 +1126,64 @@ else:
         st.write(f"**점검구(바디와 동일 모델)**: {chk_txt}")
     with cols[2]:
         st.success(f"**관리비 포함 합계**: {res['mgmt_total']:,}원")
+    # ====== 자동저장: 천장 결과를 session_state에 기록 ======
+    try:
+        st.session_state[CEIL_RESULT_KEY] = {
+            "section": "ceil",
+            "inputs": {
+                "mode": mode,  # "코너형(L자)"
+                "S_W": int(S_W), "S_L": int(S_L),
+                "H_W": int(H_W), "H_L": int(H_L),
+                "S_Wc": int(S_Wc), "S_Lc": int(S_Lc),
+                "H_Wc": int(H_Wc), "H_Lc": int(H_Lc),
+                "cut_cost": int(cut_cost),
+                "mgmt_ratio_pct": float(mgmt_ratio_pct),
+            },
+            "result": {
+                "status": res.get("status"),
+                "message": res.get("message"),
+                "sink": res.get("sink", {}),       # 세면부 최적안
+                "shower": res.get("shower", {}),   # 샤워부 최적안
+                "sum_material": res.get("sum_material"),
+                "sum_cut_cost": res.get("sum_cut_cost"),
+                "sum_total_cost": res.get("sum_total_cost"),
+                "check_price_each": res.get("check_price_each"),
+                "check_double": res.get("check_double"),
+                "subtotal": res.get("subtotal"),
+                "mgmt_total": res.get("mgmt_total"),
+            },
+        }
+        st.success("천장 결과 자동저장 완료")
+    except Exception as _e:
+        st.warning(f"천장 결과 자동저장 중 오류: {_e}")
+
+
+
+
+# ------- 천장 결과 내보내기 -------
+st.divider()
+st.subheader("천장 결과 내보내기")
+
+def _export_ceil_json():
+    data = st.session_state.get(CEIL_RESULT_KEY)
+    if not data:
+        st.warning("먼저 계산을 실행해 자동저장을 생성하세요.")
+        return
+    fname = f"ceil_{datetime.now():%Y%m%d_%H%M%S}.json"
+    path = os.path.join(EXPORT_DIR, fname)
+    _save_json(path, data)
+    st.success(f"JSON 내보냈습니다: {path}")
+
+col_e1, col_e2 = st.columns(2)
+with col_e1:
+    st.button("💾 JSON 내보내기 (파일로 저장)", on_click=_export_ceil_json, key="btn_export_ceil")
+with col_e2:
+    _data = st.session_state.get(CEIL_RESULT_KEY) or {}
+    st.download_button(
+        "⬇️ JSON 다운로드 (브라우저)",
+        data=json.dumps(_data, ensure_ascii=False, indent=2).encode("utf-8"),
+        file_name="ceil.json",
+        mime="application/json",
+        key="btn_download_ceil",
+        disabled=not bool(_data),
+    )

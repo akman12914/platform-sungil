@@ -1,10 +1,18 @@
 # streamlit run app.py
 import io
+import os, glob
 from typing import Optional, Dict, Any
 
-
-# --- design refresh (prettier inline) ---
+# --- Streamlit ---
 import streamlit as st
+st.set_page_config(page_title="바닥판 규격/옵션 산출", layout="wide")
+
+# --- Pillow / Image ---
+from PIL import Image, ImageDraw, ImageFont
+
+# --- Numpy / Pandas ---
+import numpy as np
+import pandas as pd
 
 # --- Floor/Walls 연동용 상태키 ---
 FLOOR_DONE_KEY = "floor_done"
@@ -18,22 +26,57 @@ def _init_state():
 
 _init_state()
 
+# --- Pillow font loader (CJK 안전) ---
+def _get_font(size: int = 16) -> ImageFont.ImageFont:
+    # 1) 프로젝트 루트에 폰트 파일 있으면 최우선 사용 (재현성↑)
+    for name in [
+        "NotoSansKR-Regular.ttf",
+        "NanumGothic.ttf",
+        "Pretendard-Regular.otf",
+        "NotoSans-Regular.ttf",
+        "Malgun.ttf",
+    ]:
+        p = os.path.join(os.getcwd(), name)
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size=size)
+            except Exception:
+                pass
+
+    # 2) 시스템 경로 탐색(리눅스/맥/윈도 공통 후보)
+    candidates = []
+    for pat in [
+        "/usr/share/fonts/**/NotoSans*.*",
+        "/usr/share/fonts/**/Nanum*.*",
+        "/Library/Fonts/**/AppleSDGothicNeo*.*",
+        "C:/Windows/Fonts/*malgun*.*",
+        "C:/Windows/Fonts/*nanum*.*",
+        "C:/Windows/Fonts/*noto*.*",
+    ]:
+        candidates.extend(glob.glob(pat, recursive=True))
+    for p in candidates:
+        try:
+            return ImageFont.truetype(p, size=size)
+        except Exception:
+            continue
+
+    # 3) 최후: 기본 비트맵 폰트(한글은 각질 수 있음)
+    return ImageFont.load_default()
+
 
 def _design_refresh():
-
     st.markdown(
         """
     <style>
       :root{
         /* Sidebar dark palette */
-        --sb-bg:#0b1220;         /* 다크 네이비 */
-        --sb-fg:#e2e8f0;         /* 본문 텍스트 */
-        --sb-muted:#475569;      /* 🔸보조 텍스트: 더 밝게/진하게 */
+        --sb-bg:#0b1220;
+        --sb-fg:#e2e8f0;
+        --sb-muted:#475569;
         --sb-line:#1f2a44;
 
-
-        --accent:#f1f5f9;   /* 거의 흰색 (상단) */
-        --accent-2:#cbd5e1; /* 밝은 회색 (하단) */
+        --accent:#f1f5f9;
+        --accent-2:#cbd5e1;
 
         /* Main content neutrals */
         --ink:#0f172a;
@@ -51,7 +94,7 @@ def _design_refresh():
         color:var(--sb-fg)!important;
       }
 
-      /* 🔸보조 텍스트/라벨: 더 선명 + 약간 굵게 */
+      /* 보조 텍스트/라벨 */
       section[data-testid="stSidebar"] .stMarkdown p,
       section[data-testid="stSidebar"] label,
       section[data-testid="stSidebar"] .stSelectbox label{
@@ -70,7 +113,7 @@ def _design_refresh():
         color:var(--sb-muted)!important;
       }
 
-      /* 🔧 Slider cutoff fix */
+      /* Slider cutoff fix */
       section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ padding-right:12px; }
       section[data-testid="stSidebar"] div[data-testid="stSlider"]{
         padding-right:12px; margin-right:2px; overflow:visible;
@@ -79,20 +122,17 @@ def _design_refresh():
         box-shadow:0 0 0 2px rgba(20,184,166,0.25); border-radius:999px;
       }
 
-      /* ✅ Radio: 색/정렬 깔끔하게 (red → teal, 정중앙 정렬) */
-      /* Streamlit 라디오 인풋 컬러를 액센트로 통일 */
+      /* Radio */
       input[type="radio"]{ accent-color: var(--accent); }
-      /* 라벨/원형이 수직 중앙 정렬되도록 라벨 플렉스 정렬 */
       div[role="radiogroup"] label{
         display:flex; align-items:center; gap:.5rem;
         line-height:1.2; margin: .1rem 0;
       }
-      /* 일부 환경에서 라디오 원이 1px 내려가 보이는 현상 보정 */
       div[role="radiogroup"] input[type="radio"]{
         transform: translateY(0px);
       }
 
-      /* Buttons (sidebar/main 공통) */
+      /* Buttons */
       section[data-testid="stSidebar"] .stButton>button,
       [data-testid="stAppViewContainer"] .stButton>button{
         background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
@@ -105,60 +145,41 @@ def _design_refresh():
         filter:brightness(1.05);
       }
 
-      /* 이미지 여백 (겹침 방지) */
+      /* 이미지 여백 */
       [data-testid="stImage"]{ margin:6px 0 18px!important; }
       [data-testid="stImage"] img{ display:block; }
 
-        span[label="app main"] {
-      font-size: 0 !important;          /* 기존 글자 숨김 */
-      position: relative;
-  }
-  span[label="app main"]::after {
-      content: "메인";                  /* 원하는 표시 이름 */
-      font-size: 1rem !important;       /* 기본 폰트 크기로 복원 */
-      color: #fff !important;           /* 사이드바 글씨 색 (흰색) */
-      font-weight: 700 !important;      /* 굵게 */
-      position: absolute;
-      left: 0;
-      top: 0;
-  }
+      span[label="app main"] {
+        font-size: 0 !important; position: relative;
+      }
+      span[label="app main"]::after {
+        content: "메인"; font-size: 1rem !important; color: #fff !important;
+        font-weight: 700 !important; position: absolute; left: 0; top: 0;
+      }
 
-        /* NumberInput - stepper 버튼 아이콘 색상 */
+      /* NumberInput stepper */
       button[data-testid="stNumberInputStepUp"] svg,
       button[data-testid="stNumberInputStepDown"] svg {
-          color: var(--sb-muted) !important;   /* 보조색 */
-          fill: var(--sb-muted) !important;    /* 일부 환경에서 필요 */
+          color: var(--sb-muted) !important; fill: var(--sb-muted) !important;
       }
-
-      /* 버튼 자체 hover/focus 시에도 색 유지 */
       button[data-testid="stNumberInputStepUp"]:hover svg,
       button[data-testid="stNumberInputStepDown"]:hover svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
+          color: var(--sb-muted) !important; fill: var(--sb-muted) !important;
       }
 
-            /* Selectbox: 선택된 값 텍스트 */
+      /* Selectbox */
       div[data-baseweb="select"] div[role="combobox"],
       div[data-baseweb="select"] div[role="combobox"] input,
       div[data-baseweb="select"] div[value] {
-          color: var(--sb-muted) !important;   /* 보조색 */
-          font-weight: 600 !important;         /* 조금 더 굵게 */
+          color: var(--sb-muted) !important; font-weight: 600 !important;
       }
-
-      /* Selectbox: 드롭다운 아이콘 (열림/닫힘 화살표) */
-      div[data-baseweb="select"] svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
-      }
-
-      /* Hover 시에도 색 유지 */
+      div[data-baseweb="select"] svg { color: var(--sb-muted) !important; fill: var(--sb-muted) !important; }
       div[data-baseweb="select"]:hover div[value],
       div[data-baseweb="select"]:hover svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
+          color: var(--sb-muted) !important; fill: var(--sb-muted) !important;
       }
 
-            /* 🔹 FileUploader 전체 영역 */
+      /* FileUploader */
       section[data-testid="stFileUploaderDropzone"] {
           border: 2px dashed var(--sb-line) !important;
           background: rgba(255,255,255,0.03) !important;
@@ -166,100 +187,63 @@ def _design_refresh():
           border-radius: 10px !important;
           padding: 12px !important;
       }
-
-      /* 아이콘 색상 */
       section[data-testid="stFileUploaderDropzone"] svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
+          color: var(--sb-muted) !important; fill: var(--sb-muted) !important;
       }
-
-      /* 안내 텍스트 */
       section[data-testid="stFileUploaderDropzone"] span {
-          color: var(--sb-muted) !important;
-          font-weight: 600 !important;
+          color: var(--sb-muted) !important; font-weight: 600 !important;
       }
-
-      /* 버튼 */
       section[data-testid="stFileUploaderDropzone"] button {
           background: linear-gradient(180deg,var(--accent),var(--accent-2)) !important;
-          color: #001018 !important;
-          border: 0 !important;
-          font-weight: 700 !important;
-          border-radius: 8px !important;
+          color: #001018 !important; border: 0 !important;
+          font-weight: 700 !important; border-radius: 8px !important;
           padding: .4rem .9rem !important;
       }
-      section[data-testid="stFileUploaderDropzone"] button:hover {
-          filter: brightness(1.05);
-      }
+      section[data-testid="stFileUploaderDropzone"] button:hover { filter: brightness(1.05); }
 
-            /* 계산하기 버튼 텍스트 색 변경 */
+      /* 기본 버튼 텍스트 색 */
       button[data-testid="stBaseButton-primary"] p {
-          color: var(--ink) !important;  /* 보조색 계열 */
-          font-weight: 700 !important;        /* 더 굵게 */
+          color: var(--ink) !important; font-weight: 700 !important;
       }
 
-     div[data-testid="stImageContainer"] {
-          margin-bottom: 2rem !important; /* 이미지+캡션 아래쪽 간격 */
-      }
-
-      /* 모든 stImage(도형, 미리보기 등) 출력은 강제로 블록 배치 */
+      /* stImage 컨테이너: 강제 100% 제거 → 확대 뭉개짐 방지 */
       div[data-testid="stImage"] {
           display: block !important;
-          width: 100% !important;          /* 한 줄 전용 */
-          margin: 2rem auto !important;    /* 위/아래 넉넉히 띄움 */
-          text-align: center !important;   /* 중앙 정렬 */
-          z-index: 1 !important;           /* 텍스트보다 위 */
-          position: relative !important;   /* 겹침 방지 */
+          max-width: 100% !important;   /* 부모보다 커지지 않게만 */
+          margin: 2rem auto !important;
+          text-align: center !important;
+          position: relative !important;
+      }
+      div[data-testid="stImage"] img {
+          width: auto !important; height: auto !important; /* 원본 크기 유지 */
       }
 
       /* 이미지와 캡션 간격 */
-      div[data-testid="stImageCaption"] {
-          margin-top: 1rem !important;
+      div[data-testid="stImageCaption"] { margin-top: 1rem !important; }
+
+      /* 사이드바 Alert 전용 스타일 */
+      section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] {
+          background: transparent !important; border: 1px solid #555 !important;
+          color: #e2e2e2 !important; border-radius: 6px !important; padding: 0.6rem !important;
       }
-
-    /* 사이드바 Alert 전용 스타일 */
-    section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] {
-        background: transparent !important;   /* 배경 무채색 */
-        border: 1px solid #555 !important;
-        color: #e2e2e2 !important;        /* 텍스트 색 */
-        border-radius: 6px !important;
-        padding: 0.6rem !important;
-    }
-
-    /* 내부 텍스트/아이콘은 상위 색을 따르도록 */
-    section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] * {
-        color: inherit !important;
-        fill: inherit !important;
-    }
-
-    /* 아이콘만 살짝 연한 회색 */
-    section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] svg {
-        color: #bbb !important;
-        fill: #bbb !important;
-    }
-
+      section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] * {
+          color: inherit !important; fill: inherit !important;
+      }
+      section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] svg {
+          color: #bbb !important; fill: #bbb !important;
+      }
     </style>
-
     """,
         unsafe_allow_html=True,
     )
 
 
 # --- end design refresh ---
-
 _design_refresh()
-
-
-import numpy as np
-import pandas as pd
-import streamlit as st
-from PIL import Image, ImageDraw
 
 # ---------------------------
 # UI: Sidebar (왼쪽 입력 인터페이스)
 # ---------------------------
-st.set_page_config(page_title="바닥판 규격/옵션 산출", layout="wide")
-
 st.sidebar.header("입력값 (왼쪽 인터페이스)")
 uploaded = st.sidebar.file_uploader(
     "엑셀 업로드 (시트명: 바닥판)", type=["xlsx", "xls"]
@@ -581,7 +565,7 @@ def match_corner_shower(
 
 
 # ---------------------------
-# 도형 렌더링 (PIL, 약 1/3 화면 크기)
+# 도형 렌더링 (PIL, 고해상도 렌더링 후 축소)
 # ---------------------------
 def draw_bathroom(
     shape: str,
@@ -600,28 +584,43 @@ def draw_bathroom(
     - 사각형 → 세면부(좌하), 샤워부(우하) '폭×길이' 그대로
     - 코너형 → 좌측 전고는 세면부(파랑), 우측은 샤워부(빨강, 90° 회전: 가로=샤워부 길이, 세로=샤워부 폭),
                두 영역 사이 빨간 세로 경계선 표시
-    출력 크기: 약 1/3 화면(540×360 px)
+    출력: 1080×720(2x)로 그리고 화면엔 540px로 축소 표시
     """
-    # ── 캔버스 설정
-    W, H = 540, 360
-    PAD, BORDER, GAP = 14, 6, 4
+    # ── 캔버스 설정 (고해상도 렌더링)
+    BASE_W, BASE_H = 540, 360
+    SCALE = 2  # 2배로 그리고 축소 표시
+    W, H = BASE_W * SCALE, BASE_H * SCALE
+
+    # ✅ 방향별 패딩: 위/왼쪽을 크게 잡아 라벨 공간 확보
+    PAD_L = 48 * SCALE     # 왼쪽 (라벨 "욕실폭"이 바깥으로 나갈 공간)
+    PAD_R = 16 * SCALE
+    PAD_T = 48 * SCALE     # 위쪽 (라벨 "욕실길이"가 바깥으로 나갈 공간)
+    PAD_B = 16 * SCALE
+
+
+    BORDER, GAP = 6 * SCALE, 4 * SCALE
 
     img = Image.new("RGB", (W, H), "white")
     drw = ImageDraw.Draw(img)
 
-    def safe_rect(x0, y0, x1, y1, color, width=3):
+    # 폰트(라벨/작은 글자)
+    font_label = _get_font(18 * SCALE)
+    font_small = _get_font(14 * SCALE)
+
+    def safe_rect(x0, y0, x1, y1, color, width=3 * SCALE):
         """좌표가 유효할 때만 사각형 그림(예외 방지)."""
         if x1 <= x0 or y1 <= y0:
             return False
         drw.rectangle([x0, y0, x1, y1], outline=color, width=width)
         return True
 
-    def text_center(x, y, txt, fill="black"):
-        """Pillow 버전 호환용 중앙 정렬 텍스트."""
+    def text_center(x, y, txt, fill="black", font=None):
+        if font is None:
+            font = font_label
         try:
-            drw.text((x, y), txt, fill=fill, anchor="mm")
+            drw.text((x, y), txt, fill=fill, anchor="mm", font=font)
         except TypeError:
-            drw.text((x - 20, y - 8), txt, fill=fill)
+            drw.text((x - 20 * SCALE, y - 8 * SCALE), txt, fill=fill, font=font)
 
     # None 방어
     sw = 0 if sw_mm is None else int(sw_mm)
@@ -629,9 +628,13 @@ def draw_bathroom(
     shw = 0 if shw_mm is None else int(shw_mm)
     shl = 0 if shl_mm is None else int(shl_mm)
 
+   # ✅ 방향별 패딩을 반영한 가용 너비/높이
+    avail_w = W - (PAD_L + PAD_R)
+    avail_h = H - (PAD_T + PAD_B)
+
     # 스케일(mm→px) : 가로=욕실길이, 세로=욕실폭
-    sx = (W - 2 * PAD) / float(max(1, bl_mm))
-    sy = (H - 2 * PAD) / float(max(1, bw_mm))
+    sx = avail_w / float(max(1, bl_mm))
+    sy = avail_h / float(max(1, bw_mm))
     s = min(sx, sy)
 
     # 욕실 외곽
@@ -641,14 +644,47 @@ def draw_bathroom(
     y0 = (H - BH) // 2
     x1 = x0 + BW
     y1 = y0 + BH
-    safe_rect(x0, y0, x1, y1, "black", 3)
+    safe_rect(x0, y0, x1, y1, "black", 3 * SCALE)
+
+    # ✅ 라벨을 그릴 좌표 계산 + 화면 밖 방지(최소값 클램프)
+    # 텍스트 크기 파악(혹시 anchor 미지원 Pillow 대비)
+    try:
+        # getbbox → (x0, y0, x1, y1)
+        bx1 = font_small.getbbox("욕실길이")
+        w1, h1 = (bx1[2] - bx1[0], bx1[3] - bx1[1])
+        bx2 = font_small.getbbox("욕실폭")
+        w2, h2 = (bx2[2] - bx2[0], bx2[3] - bx2[1])
+    except Exception:
+        # getbbox 미지원일 경우 대략값
+        w1 = 80 * SCALE; h1 = 20 * SCALE
+        w2 = 60 * SCALE; h2 = 20 * SCALE
+
+    # 위쪽 중앙 바깥(아래로 붙이는 'mb' 기준): y가 너무 작아지지 않게 클램프
+    top_x = (x0 + x1) / 2
+    top_y = max(4 * SCALE + h1, y0 - 8 * SCALE)
+    try:
+        drw.text((top_x, top_y), "욕실길이", fill="black", anchor="mb", font=font_small)
+    except Exception:
+        # anchor 미지원일 때 대략 중앙 정렬
+        drw.text((top_x - w1/2, top_y - h1), "욕실길이", fill="black", font=font_small)
+
+    # 왼쪽 중앙 바깥(오른쪽으로 붙이는 'rm' 기준): x가 너무 작아지지 않게 클램프
+    left_x = max(4 * SCALE + w2, x0 - 8 * SCALE)
+    left_y = (y0 + y1) / 2
+    try:
+        drw.text((left_x, left_y), "욕실폭", fill="black", anchor="rm", font=font_small)
+    except Exception:
+        drw.text((left_x - w2, left_y - h2/2), "욕실폭", fill="black", font=font_small)
+
 
     # 치수 라벨(간단)
-    try:
-        drw.text(((x0 + x1) / 2, y0 - 8), "욕실길이", fill="black", anchor="mb")
-        drw.text((x0 - 8, (y0 + y1) / 2), "욕실폭", fill="black", anchor="rm")
-    except Exception:
-        pass
+    # try:
+    #     drw.text(((x0 + x1) / 2, y0 - 8 * SCALE), "욕실길이",
+    #              fill="black", anchor="mb", font=font_small)
+    #     drw.text((x0 - 8 * SCALE, (y0 + y1) / 2), "욕실폭",
+    #              fill="black", anchor="rm", font=font_small)
+    # except Exception:
+    #     pass
 
     # ── 중앙배수 Yes 또는 유형 구분없음 → 외곽만
     if (central == "Yes") or (btype == "구분없음"):
@@ -664,8 +700,8 @@ def draw_bathroom(
             sy1 = y1 - BORDER
             sx1 = min(x1 - BORDER, sx0 + sink_w)
             sy0 = max(y0 + BORDER, sy1 - sink_h)
-            if safe_rect(sx0, sy0, sx1, sy1, "blue", 3):
-                text_center((sx0 + sx1) / 2, (sy0 + sy1) / 2, "세면부", "blue")
+            if safe_rect(sx0, sy0, sx1, sy1, "blue", 3 * SCALE):
+                text_center((sx0 + sx1) / 2, (sy0 + sy1) / 2, "세면부", "blue", font=font_label)
 
         # 샤워부(우하)
         if shw > 0 and shl > 0:
@@ -678,8 +714,8 @@ def draw_bathroom(
             # 세면부와 겹치면 우측으로 한 칸 밀어줌
             if "sx1" in locals() and tx0 < (sx1 + GAP):
                 tx0 = min(tx1 - 1, sx1 + GAP)
-            if safe_rect(tx0, ty0, tx1, ty1, "red", 3):
-                text_center((tx0 + tx1) / 2, (ty0 + ty1) / 2, "샤워부", "red")
+            if safe_rect(tx0, ty0, tx1, ty1, "red", 3 * SCALE):
+                text_center((tx0 + tx1) / 2, (ty0 + ty1) / 2, "샤워부", "red", font=font_label)
 
         return img
 
@@ -693,14 +729,14 @@ def draw_bathroom(
     left_x0 = x0 + BORDER
     left_x1 = max(left_x0 + 1, boundary_x - GAP)
     if left_x1 > left_x0:
-        if safe_rect(left_x0, y0 + BORDER, left_x1, y1 - BORDER, "blue", 3):
-            text_center((left_x0 + left_x1) / 2, (y0 + y1) / 2, "세면부", "blue")
+        if safe_rect(left_x0, y0 + BORDER, left_x1, y1 - BORDER, "blue", 3 * SCALE):
+            text_center((left_x0 + left_x1) / 2, (y0 + y1) / 2, "세면부", "blue", font=font_label)
 
     # 경계선(전고)
     ImageDraw.Draw(img).line(
         [boundary_x, y0 + BORDER // 2, boundary_x, y1 - BORDER // 2],
         fill="red",
-        width=3,
+        width=3 * SCALE,
     )
 
     # 샤워부(우측, 90° 회전: 가로=샤워부 '길이', 세로=샤워부 '폭')
@@ -712,8 +748,8 @@ def draw_bathroom(
         ry1 = y1 - BORDER
         rx0 = max(boundary_x + BORDER, rx1 - min(rot_w, usable_w))
         ry0 = max(y0 + BORDER, ry1 - rot_h)
-        if safe_rect(rx0, ry0, rx1, ry1, "red", 3):
-            text_center((rx0 + rx1) / 2, (ry0 + ry1) / 2, "샤워부", "red")
+        if safe_rect(rx0, ry0, rx1, ry1, "red", 3 * SCALE):
+            text_center((rx0 + rx1) / 2, (ry0 + ry1) / 2, "샤워부", "red", font=font_label)
 
     return img
 
@@ -753,12 +789,6 @@ if do_calc:
         decision_log.append(
             "샤워부 1000×900 감지됨(예외 규격) → 사이드바에서 적용 여부 선택 가능"
         )
-
-    # (선택) 샤워부 1000×900 → 900×1000으로 정확 일치 교정이 필요하다면 아래 주석 해제
-    # if (not disable_sink_shower) and (shw is not None) and (shl is not None):
-    #     if exact_eq(shw, 1000) and exact_eq(shl, 900):
-    #         decision_log.append("샤워부(1000×900) → 예외규칙(정확일치)으로 900×1000 교정")
-    #         shw, shl = 900, 1000
 
     # 세대수 우선 규칙
     if units < 100:
@@ -847,7 +877,8 @@ if do_calc:
 
     with left:
         img = draw_bathroom(shape, bw, bl, sw, sl, shw_eff, shl_eff, central, btype)
-        st.image(img, caption="욕실 도형(약 1/3 크기)", width=480)
+        # 고해상도(1080x720)로 그린 이미지를 540px로 축소 표시 → 숫자 선명
+        st.image(img, caption="욕실 도형(약 1/3 크기)", width=540, output_format="PNG")
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
     with right:

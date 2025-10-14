@@ -205,6 +205,15 @@ _design_refresh("벽판 계산기", "UI 정리 · 사이드바 유지")
 import streamlit as st
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
+# (파일 상단 import들 아래 어딘가)
+import os, json
+from datetime import datetime
+EXPORT_DIR = "exports"
+os.makedirs(EXPORT_DIR, exist_ok=True)
+
+def _save_json(path:str, data:dict):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 try:
     FONT = ImageFont.truetype("NanumGothic.ttf", 16)   # 16~18 추천
     FONT_SMALL = ImageFont.truetype("NanumGothic.ttf", 14)
@@ -217,6 +226,16 @@ st.set_page_config(page_title="벽판 규격/개수 산출 (통합, New Engine)"
 # =========================================================
 # 0) 공통 유틸
 # =========================================================
+
+FLOOR_DONE_KEY = "floor_done"
+FLOOR_RESULT_KEY = "floor_result"
+
+WALL_DONE_KEY  = "wall_done"
+WALL_RESULT_KEY = "wall_result"
+
+CEIL_DONE_KEY  = "ceil_done"
+CEIL_RESULT_KEY = "ceil_result"
+
 def parse_tile(tile_str: str) -> Tuple[int, int]:
     """'300×600' 또는 '250×400' → (300, 600)"""
     a, b = tile_str.replace("x", "×").split("×")
@@ -998,6 +1017,13 @@ with st.sidebar:
     H = st.number_input("벽 높이 H (mm)", min_value=300, value=2200, step=50)
     floor_type = st.radio("바닥판 유형", ["PVE", "그외(GRP/FRP)"], horizontal=True)
     tile = st.selectbox("벽타일 규격", ["300×600", "250×400"])
+    # floor 연동: 바닥이 PVE면 자동으로 기본값 설정
+    floor_res = st.session_state.get(FLOOR_RESULT_KEY)  # {'material': 'PVE' | 'GRP'...}
+    if floor_res:
+        mat = str(floor_res.get("material","")).upper()
+        # 사이드바 라디오에 반영(이미 선언된 floor_type 변수를 덮어씀)
+        floor_type = "PVE" if "PVE" in mat else "그외(GRP/FRP)"
+        st.sidebar.info(f"바닥 재질 자동 반영: {floor_type}")
     H_eff = effective_height(H, floor_type)
 
     st.divider()
@@ -1047,6 +1073,8 @@ with st.sidebar:
 
     st.divider()
     calc = st.button("계산 & 미리보기", type="primary")
+
+    
 
 errors: List[str] = []
 preview_img: Optional[Image.Image] = None
@@ -1165,6 +1193,43 @@ if shape == "사각형":
                 df_err = (pd.DataFrame(errs).rename(columns={"face_w":"벽면폭","face_h":"벽면높이"}))
                 st.dataframe(df_err, width="stretch")
 
+            # ====== 자동저장: 벽판 결과를 session_state에 기록 ======
+            try:
+                # rows, errs가 이미 계산되어 있다고 가정
+                # 필수 입력 요약도 같이 저장합니다.
+                st.session_state["wall_result"] = {
+                    "section": "wall",
+                    "inputs": {
+                        "shape": shape,
+                        "split_kind": split_kind,
+                        "H": int(H),
+                        "H_eff": int(H_eff),
+                        "floor_type": floor_type,
+                        "tile": tile,
+                        "door_wall": (int(door_wall) if 'door_wall' in locals() else None),
+                        "door_s": (float(door_s) if 'door_s' in locals() else None),
+                        "door_d": (float(door_d) if 'door_d' in locals() else None),
+                        "j_enabled": bool(j_enabled),
+                        "j_wall": (int(j_wall) if j_enabled and (j_wall is not None) else None),
+                        "j_has_step": bool(j_has_step),
+                        "j_h": (int(j_h) if j_enabled else 0),
+                        "j_depth": (int(j_depth) if j_enabled else 0),
+                        "j_contact_walls": (j_contact_walls if j_enabled else []),
+                    },
+                    "result": {
+                        "panels": rows,         # panels_for_faces_new_engine()에서 받아온 rows
+                        "errors": errs,         # 같은 함수에서의 errs
+                        # 필요하면 아래처럼 통계치도 추가
+                        "counts": {
+                            "n_panels": len(rows),
+                            "n_errors": len(errs),
+                        },
+                    }
+                }
+                st.success("벽판 결과 자동저장 완료")
+            except Exception as _e:
+                st.warning(f"벽판 결과 자동저장 중 오류: {_e}")
+                
 else:
     # 코너형
     st.subheader("코너형 입력 (W1~W6)")
@@ -1276,5 +1341,70 @@ else:
             if errs:
                 st.warning("규칙 적용 실패/제약 위반 벽면")
                 st.dataframe(pd.DataFrame(errs).rename(columns={"face_w":"벽면폭","face_h":"벽면높이"}), width="stretch")
+                # ====== 자동저장: 벽판 결과를 session_state에 기록 ======
+            try:
+                # rows, errs가 이미 계산되어 있다고 가정
+                # 필수 입력 요약도 같이 저장합니다.
+                st.session_state["wall_result"] = {
+                    "section": "wall",
+                    "inputs": {
+                        "shape": shape,
+                        "split_kind": split_kind,
+                        "H": int(H),
+                        "H_eff": int(H_eff),
+                        "floor_type": floor_type,
+                        "tile": tile,
+                        "door_wall": (int(door_wall) if 'door_wall' in locals() else None),
+                        "door_s": (float(door_s) if 'door_s' in locals() else None),
+                        "door_d": (float(door_d) if 'door_d' in locals() else None),
+                        "j_enabled": bool(j_enabled),
+                        "j_wall": (int(j_wall) if j_enabled and (j_wall is not None) else None),
+                        "j_has_step": bool(j_has_step),
+                        "j_h": (int(j_h) if j_enabled else 0),
+                        "j_depth": (int(j_depth) if j_enabled else 0),
+                        "j_contact_walls": (j_contact_walls if j_enabled else []),
+                    },
+                    "result": {
+                        "panels": rows,         # panels_for_faces_new_engine()에서 받아온 rows
+                        "errors": errs,         # 같은 함수에서의 errs
+                        # 필요하면 아래처럼 통계치도 추가
+                        "counts": {
+                            "n_panels": len(rows),
+                            "n_errors": len(errs),
+                        },
+                    }
+                }
+                st.success("벽판 결과 자동저장 완료")
+            except Exception as _e:
+                st.warning(f"벽판 결과 자동저장 중 오류: {_e}")
 
 st.caption("※ 새 엔진 적용: 2400 모듈 + 가로/세로 발란스 규칙 통합, 최대 9600까지 확장. 젠다이 높이/깊이·단차·접벽 로직 유지. 설치공간은 정면도 검정 오버레이로만 표시하며 집계에서 제외됩니다.")
+
+
+# ------- 벽 결과 내보내기 -------
+st.divider()
+st.subheader("벽 결과 내보내기")
+
+def _export_wall_json():
+    data = st.session_state.get("wall_result")
+    if not data:
+        st.warning("먼저 계산을 실행해 자동저장을 생성하세요.")
+        return
+    fname = f"wall_{datetime.now():%Y%m%d_%H%M%S}.json"
+    path = os.path.join(EXPORT_DIR, fname)
+    _save_json(path, data)
+    st.success(f"JSON 내보냈습니다: {path}")
+
+col_e1, col_e2 = st.columns(2)
+with col_e1:
+    st.button("💾 JSON 내보내기 (파일로 저장)", on_click=_export_wall_json, key="btn_export_wall")
+with col_e2:
+    _data = st.session_state.get("wall_result") or {}
+    st.download_button(
+        "⬇️ JSON 다운로드 (브라우저)",
+        data=json.dumps(_data, ensure_ascii=False, indent=2).encode("utf-8"),
+        file_name="wall.json",
+        mime="application/json",
+        key="btn_download_wall",
+        disabled=not bool(_data),
+    )

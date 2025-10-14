@@ -1,6 +1,6 @@
 # streamlit run app.py
 import io
-import os, glob
+import os, glob,json
 from typing import Optional, Dict, Any
 
 # --- Streamlit ---
@@ -18,13 +18,48 @@ import pandas as pd
 FLOOR_DONE_KEY = "floor_done"
 FLOOR_RESULT_KEY = "floor_result"
 
+# ===== 경로 =====
+EXPORT_DIR = "exports"             # 섹션 JSON 저장 폴더
+os.makedirs(EXPORT_DIR, exist_ok=True)
 
-def _init_state():
-    st.session_state.setdefault(FLOOR_DONE_KEY, False)
-    st.session_state.setdefault(FLOOR_RESULT_KEY, None)
+# ===== 유틸 =====
+def _get_font(size:int=16)->ImageFont.ImageFont:
+    try: return ImageFont.truetype("NotoSansKR-Regular.ttf", size)
+    except: return ImageFont.load_default()
+
+def _map_floor_material_label(result_kind: str) -> str:
+    rk = (result_kind or "").upper()
+    if "PVE" in rk: return "PP/PE 바닥판"
+    if "FRP" in rk: return "SMC/FRP바닥판"
+    return "GRP바닥판"
+
+def _extract_prices_from_row(row) -> Dict[str, int]:
+    prices = {"단가1":0,"노무비":0,"단가2":0}
+    if row is None: return prices
+    for k in prices.keys():
+        if k in row and pd.notna(row[k]):
+            try: prices[k]=int(row[k])
+            except: pass
+    return prices
+
+def _pve_prices_from_quote(q: Dict[str, Any]) -> Dict[str, int]:
+    return {
+        "단가1": int(q.get("원재료비", 0)),
+        "노무비": int(q.get("가공비", 0)),
+        "단가2": int(q.get("소계", 0)),
+    }
+
+def save_json(path:str, data:Dict[str,Any]):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-_init_state()
+# def _init_state():
+#     st.session_state.setdefault(FLOOR_DONE_KEY, False)
+#     st.session_state.setdefault(FLOOR_RESULT_KEY, None)
+
+
+# _init_state()
 
 # --- Pillow font loader (CJK 안전) ---
 def _get_font(size: int = 16) -> ImageFont.ImageFont:
@@ -779,163 +814,180 @@ if do_calc:
 
     if exception_applied:
         decision_log.append("샤워부 1000×900 → 예외규칙 적용으로 900×1000 간주")
-    elif (
-        (not disable_sink_shower)
-        and (shw is not None)
-        and (shl is not None)
-        and shw == 1000
-        and shl == 900
-    ):
-        decision_log.append(
-            "샤워부 1000×900 감지됨(예외 규격) → 사이드바에서 적용 여부 선택 가능"
-        )
+    elif ((not disable_sink_shower) and (shw is not None) and (shl is not None)
+          and shw == 1000 and shl == 900):
+        decision_log.append("샤워부 1000×900 감지됨(예외 규격) → 사이드바에서 적용 여부 선택 가능")
 
-    # 세대수 우선 규칙
+    # 이 변수들 반드시 모든 분기에서 채워지게 기본값 준비
+    result_kind = None
+    base_subtotal = 0
+    mgmt_total = 0
+    prices = {"단가1": 0, "노무비": 0, "단가2": 0}
+    material_label = ""
+    floor_spec = f"{int(bw)}×{int(bl)}"  # 기본 규격 문자열
+
+    # ---------------------------
+    # 결정 로직
+    # ---------------------------
     if units < 100:
+        # PVE 강제
         decision_log.append(f"세대수={units} (<100) → PVE 강제 선택")
         q = pve_quote(bw, bl, mgmt_rate, pve_kind)
-        material = q["소재"]
+        result_kind = "PVE"
         base_subtotal = q["소계"]
         mgmt_total = q["관리비포함소계"]
-        result_kind = "PVE"
-
+        prices = _pve_prices_from_quote(q)
     else:
-        # 1) 중앙배수 Yes → GRP(중앙배수) 시도 → 실패 시 PVE
         if central == "Yes":
             decision_log.append("중앙배수=Yes → GRP(중앙배수) 매칭 시도")
             matched = match_center_drain(df, shape, btype, bw, bl)
             if matched is None:
                 decision_log.append("GRP(중앙배수) 매칭 실패 → PVE 계산")
                 q = pve_quote(bw, bl, mgmt_rate, pve_kind)
-                material = q["소재"]
+                result_kind = "PVE"
                 base_subtotal = q["소계"]
                 mgmt_total = q["관리비포함소계"]
-                result_kind = "PVE"
+                prices = _pve_prices_from_quote(q)
             else:
                 row = matched["row"]
-                material = matched["소재"]
+                result_kind = "GRP"  # 표준화
                 base_subtotal = int(row["소계"])
-                result_kind = material
+                prices = _extract_prices_from_row(row)
                 decision_log.append("GRP(중앙배수) 매칭 성공 → 최소 소계 선택")
-
-        # 2) 중앙배수 No
         else:
             if shape == "사각형":
                 decision_log.append("중앙배수=No & 형태=사각형")
-                matched = match_non_center_rectangle(
-                    df, btype, bw, bl, sw, sl, shw_eff, shl_eff
-                )
+                matched = match_non_center_rectangle(df, btype, bw, bl, sw, sl, shw_eff, shl_eff)
                 if matched is None:
                     decision_log.append("사각형 매칭 실패 → PVE 계산")
                     q = pve_quote(bw, bl, mgmt_rate, pve_kind)
-                    material = q["소재"]
+                    result_kind = "PVE"
                     base_subtotal = q["소계"]
                     mgmt_total = q["관리비포함소계"]
-                    result_kind = "PVE"
+                    prices = _pve_prices_from_quote(q)
                 else:
                     row = matched["row"]
-                    material = matched["소재"]
+                    result_kind = "FRP" if matched["소재"] == "FRP" else "GRP"
                     base_subtotal = int(row["소계"])
-                    result_kind = f"{material}" + (
-                        " (단차없음)" if matched.get("단차없음") else ""
-                    )
+                    prices = _extract_prices_from_row(row)
+                    if matched.get("단차없음"):
+                        result_kind += " (단차없음)"
                     decision_log.append(f"{result_kind} 매칭 성공 → 최소 소계 선택")
             else:
-                decision_log.append(
-                    "중앙배수=No & 형태=코너형 & 유형=샤워형 → GRP→FRP 순서"
-                )
-                matched = match_corner_shower(
-                    df,
-                    bw,
-                    bl,
-                    sw,
-                    sl,
-                    shw_eff,
-                    shl_eff,
-                )
+                decision_log.append("중앙배수=No & 형태=코너형 & 유형=샤워형 → GRP→FRP 순서")
+                matched = match_corner_shower(df, bw, bl, sw, sl, shw_eff, shl_eff)
                 if matched is None:
                     decision_log.append("코너형/샤워형 매칭 실패 → PVE 계산")
                     q = pve_quote(bw, bl, mgmt_rate, pve_kind)
-                    material = q["소재"]
+                    result_kind = "PVE"
                     base_subtotal = q["소계"]
                     mgmt_total = q["관리비포함소계"]
-                    result_kind = "PVE"
+                    prices = _pve_prices_from_quote(q)
                 else:
                     row = matched["row"]
-                    material = matched["소재"]
+                    result_kind = "FRP" if matched["소재"] == "FRP" else "GRP"
                     base_subtotal = int(row["소계"])
-                    result_kind = material
+                    prices = _extract_prices_from_row(row)
                     decision_log.append(f"{result_kind} 매칭 성공 → 최소 소계 선택")
 
-        # 공통: 관리비 포함 소계(매칭 케이스에도 적용)
-        mgmt_total = int(round(base_subtotal * (1.0 + mgmt_rate)))
+        # 매칭 케이스에도 관리비 적용
+        if mgmt_total == 0:
+            mgmt_total = int(round(base_subtotal * (1.0 + mgmt_rate)))
+
+    # 공통: 재질 라벨 및 규격(문자열) 정규화
+    material_label = _map_floor_material_label(result_kind or "")
+    floor_spec = f"{int(bw)}×{int(bl)}"  # 필요시 행(row)에서 규격 필드가 있으면 치환
+
+    floor_result_payload = {
+    "section": "floor",
+    "material": material_label,
+    "spec": floor_spec,
+    "prices": {
+        "단가1": int(prices.get("단가1", 0)),
+        "노무비": int(prices.get("노무비", 0)),
+        "단가2": int(prices.get("단가2", 0)),
+    },
+    "qty": 1,
+    "meta": {
+        "result_kind": result_kind,
+        "subtotal": int(base_subtotal),
+        "subtotal_with_mgmt": int(mgmt_total),
+        "inputs": {
+            "central": central, "shape": shape, "btype": btype,
+            "bw": int(bw), "bl": int(bl),
+            "sw": (None if sw is None else int(sw)),
+            "sl": (None if sl is None else int(sl)),
+            "shw": (None if shw_eff is None else int(shw_eff)),
+            "shl": (None if shl_eff is None else int(shl_eff)),
+            "mgmt_rate_pct": float(mgmt_rate_pct),
+            "pve_kind": pve_kind,
+            "units": int(units),
+        },
+    },
+    }
+
+    # 세션 상태에 자동 저장
+    st.session_state[FLOOR_RESULT_KEY] = floor_result_payload
+    st.session_state[FLOOR_DONE_KEY] = True
+    st.toast("바닥 계산 결과가 자동 저장되었습니다.", icon="✅")
 
     # ---------------------------
-    # 출력
+    # 출력(UI) — 단 한 번만!
     # ---------------------------
     left, right = st.columns([1, 2], vertical_alignment="top")
 
     with left:
         img = draw_bathroom(shape, bw, bl, sw, sl, shw_eff, shl_eff, central, btype)
-        # 고해상도(1080x720)로 그린 이미지를 540px로 축소 표시 → 숫자 선명
         st.image(img, caption="욕실 도형(약 1/3 크기)", width=540, output_format="PNG")
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
     with right:
         st.subheader("선택된 바닥판")
-        st.write(f"**재질**: {result_kind}")
+        st.write(f"**재질**: {material_label}")
+        st.write(f"**규격**: {floor_spec}")
+        st.write(f"**단가1/노무비/단가2**: {prices['단가1']:,} / {prices['노무비']:,} / {prices['단가2']:,}")
         st.write(f"**소계(원)**: {base_subtotal:,}")
-        st.write(
-            f"**관리비 포함 소계(원)**: {mgmt_total:,}  (관리비율 {mgmt_rate_pct:.1f}%)"
-        )
+        st.write(f"**관리비 포함 소계(원)**: {mgmt_total:,}  (관리비율 {mgmt_rate_pct:.1f}%)")
 
         st.info("결정 과정", icon="ℹ️")
         st.write("\n".join([f"- {x}" for x in decision_log]))
 
         st.markdown("---")
-        b1, b2, b3 = st.columns([1, 1, 2])
+        b1, b2 = st.columns([1, 1])
 
-        def _save_done():
-            # 바닥 결과 요약 저장 (벽 페이지에서 활용할 수 있도록 최소 정보만)
-            st.session_state[FLOOR_RESULT_KEY] = {
-                "material": result_kind,
-                "subtotal": int(base_subtotal),
-                "subtotal_with_mgmt": int(mgmt_total),
-                "inputs": {
-                    "central": central,
-                    "shape": shape,
-                    "btype": btype,
-                    "bw": int(bw),
-                    "bl": int(bl),
-                    "sw": (None if sw is None else int(sw)),
-                    "sl": (None if sl is None else int(sl)),
-                    "shw": (None if shw_eff is None else int(shw_eff)),
-                    "shl": (None if shl_eff is None else int(shl_eff)),
-                    "mgmt_rate_pct": float(mgmt_rate_pct),
-                    "pve_kind": pve_kind,
-                    "units": int(units),
-                },
-            }
-            st.session_state[FLOOR_DONE_KEY] = True
-            st.success("바닥 계산 결과를 저장했습니다. (다음 단계로 이동 가능)")
 
-        def _reset_done():
-            st.session_state[FLOOR_DONE_KEY] = False
-            st.session_state[FLOOR_RESULT_KEY] = None
-            st.info("저장 상태를 초기화했습니다.")
 
-        with b1:
-            st.button("✅ 완료 저장", on_click=_save_done, type="primary")
-        with b2:
-            st.button("↩️ 초기화", on_click=_reset_done)
 
-        with b3:
-            # 프로그램적으로 벽 페이지로 이동 (Streamlit 1.25+)
-            go_wall = st.button("➡️ 벽 계산기로 이동", help="저장 후 이동을 권장")
-            if go_wall:
-                try:
-                    st.switch_page("pages/original_wall.py")
-                except Exception:
-                    st.info("좌측 네비게이션에서 ‘벽판 계산’ 페이지로 이동해주세요.")
+# ─────────────────────────────────────────
+# (항상 표시) 저장된 바닥 결과 JSON 내보내기 / 다운로드
+# ─────────────────────────────────────────
+st.markdown("---")
+st.subheader("바닥 결과 내보내기")
 
-    st.success("계산 완료 ✅")
+def _export_json():
+    data = st.session_state.get(FLOOR_RESULT_KEY)
+    if not data:
+        st.warning("먼저 '✅ 완료 저장'을 눌러 결과를 저장하세요.")
+        return
+    fname = f"floor_{pd.Timestamp.now():%Y%m%d_%H%M%S}.json"
+    path = os.path.join(EXPORT_DIR, fname)
+    save_json(path, data)
+    st.success(f"JSON 내보냈습니다: {path}")
+
+col_e1, col_e2 = st.columns(2)
+with col_e1:
+    st.button("💾 JSON 내보내기 (파일로 저장)", on_click=_export_json, key="btn_export_floor")
+
+with col_e2:
+    data = st.session_state.get(FLOOR_RESULT_KEY)
+    st.download_button(
+        "⬇️ JSON 다운로드 (브라우저)",
+        data=(
+            json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+            if data else b"{}"
+        ),
+        file_name="floor.json",
+        mime="application/json",
+        disabled=not bool(data),
+        key="btn_download_floor",
+    )

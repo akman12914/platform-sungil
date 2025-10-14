@@ -1,4 +1,20 @@
+import os, json
+from datetime import datetime
+from pathlib import Path
 import streamlit as st
+
+FLOOR_DONE_KEY = "floor_done"
+FLOOR_RESULT_KEY = "floor_result"
+
+WALL_DONE_KEY  = "wall_done"
+WALL_RESULT_KEY = "wall_result"
+
+CEIL_DONE_KEY  = "ceil_done"
+CEIL_RESULT_KEY = "ceil_result"
+
+EXPORT_DIR = "exports"
+os.makedirs(EXPORT_DIR, exist_ok=True)
+
 
 # 안전한 set_page_config
 try:
@@ -141,4 +157,38 @@ with c3:
         "pages/천장판_계산.py",
         label="🟨 천장판 최적화\n패턴 전수/최소비용 조합",
         icon=None,
+    )
+
+
+st.divider()
+st.header("통합 JSON 내보내기")
+
+floor_data = st.session_state.get("floor_result")
+wall_data  = st.session_state.get("wall_result")
+ceil_data  = st.session_state.get("ceil_result")
+
+combined = {
+    "exported_at": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
+    "floor": floor_data,
+    "wall":  wall_data,
+    "ceil":  ceil_data,
+}
+
+def _export_all_json():
+    fname = f"all_{datetime.now():%Y%m%d_%H%M%S}.json"
+    path = os.path.join(EXPORT_DIR, fname)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(combined, f, ensure_ascii=False, indent=2)
+    st.success(f"통합 JSON 내보냈습니다: {path}")
+
+colA, colB = st.columns(2)
+with colA:
+    st.button("💾 통합 JSON 파일로 저장", on_click=_export_all_json, key="btn_export_all")
+with colB:
+    st.download_button(
+        "⬇️ 통합 JSON 다운로드 (브라우저)",
+        data=json.dumps(combined, ensure_ascii=False, indent=2).encode("utf-8"),
+        file_name="all.json",
+        mime="application/json",
+        key="btn_download_all",
     )

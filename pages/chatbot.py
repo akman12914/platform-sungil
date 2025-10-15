@@ -6,6 +6,9 @@ import streamlit as st
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+import math
+from typing import List, Tuple
+
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -16,6 +19,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
+from langchain.schema import Document
 
 
 def _sidebar_dark_and_slider_fix():
@@ -188,6 +192,78 @@ def _save_uploaded_to_temp(uploaded_file, suffix):
         return tmp.name
     finally:
         tmp.close()
+
+
+# ---------------------------------------
+# 함수: 최신우선 가중치(신선도) + 유사도 재랭킹 검색
+# ---------------------------------------
+
+
+def _parse_ts(ts: str) -> float:
+    # ISO8601 → epoch seconds
+    try:
+        return datetime.fromisoformat(ts).timestamp()
+    except Exception:
+        return 0.0
+
+
+def search_with_recency_rerank(
+    vs,
+    query: str,
+    k: int = 4,
+    fetch_k: int = 32,
+    w_recency: float = 0.35,
+    half_life_days: float = 14.0,
+) -> List[Document]:
+    """
+    벡터 유사도 + 신선도(지수감쇠) 결합 점수로 재랭크.
+    FAISS.similarity_search_with_score 를 사용하고, 점수정규화 후 결합.
+    """
+    # 1) 충분히 넓게 후보 수집
+    try:
+        pairs: List[Tuple[Document, float]] = vs.similarity_search_with_score(
+            query, k=fetch_k
+        )
+        # 일부 구현은 score가 "작을수록 유사"(거리)일 수 있으므로 뒤에서 정규화로 보정
+    except Exception:
+        # fallback
+        docs = vs.similarity_search(query, k=fetch_k)
+        pairs = [(d, 0.0) for d in docs]
+
+    now = datetime.now(tz=SEOUL_TZ).timestamp()
+    # 2) score 정규화 (min-max → 유사도 방향으로 뒤집기)
+    scores = [s for _, s in pairs]
+    if scores:
+        s_min, s_max = min(scores), max(scores)
+        # 거리를 유사도로 변환: 작은게 더 유사 → inv_norm
+        sim_norm = []
+        for doc, s in pairs:
+            if s_max == s_min:
+                inv = 1.0
+            else:
+                # 0~1로 정규화 후 뒤집기
+                inv = 1.0 - ((s - s_min) / (s_max - s_min))
+            sim_norm.append((doc, inv))
+    else:
+        sim_norm = [(doc, 1.0) for doc, _ in pairs]
+
+    # 3) recency 점수: half-life 기반 지수 감쇠
+    hl_secs = half_life_days * 86400.0
+    ranked = []
+    for doc, sim in sim_norm:
+        ts = _parse_ts(doc.metadata.get("timestamp", ""))  # epoch
+        # 시간이 없으면 0점
+        if ts <= 0:
+            rec = 0.0
+        else:
+            age = max(0.0, now - ts)
+            rec = math.exp(-age / hl_secs)  # 최근일수록 1에 가까움
+
+        combined = (1.0 - w_recency) * sim + (w_recency) * rec
+        ranked.append((combined, doc, sim, rec))
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [d for _, d, _, _ in ranked[:k]]
 
 
 # ---------------------------------------
@@ -554,8 +630,14 @@ else:
 
     if st.button("🔎 질의 실행", type="primary") and q.strip():
         with st.spinner("검색 및 답변 생성 중..."):
-            docs = retriever.invoke(q)
-
+            docs = search_with_recency_rerank(
+                st.session_state["vectorstore"],
+                q,
+                k=k_ctx,
+                fetch_k=max(24, k_ctx * 6),
+                w_recency=0.35,
+                half_life_days=14,
+            )
             chat_history_str = (
                 "\n".join(
                     [

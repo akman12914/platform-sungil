@@ -4,7 +4,7 @@ import shutil
 import re
 import streamlit as st
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import math
 from typing import List, Tuple
@@ -272,10 +272,12 @@ def search_with_recency_rerank(
 def load_docs(uploaded_files):
     docs = []
     batch_id = datetime.now(tz=SEOUL_TZ).strftime("%Y%m%d-%H%M%S")
-    batch_ts = datetime.now(tz=SEOUL_TZ).isoformat()
+    base_ts = datetime.now(tz=SEOUL_TZ)
+    step = 1  # 파일 간 1초 간격
 
-    for f in uploaded_files:
+    for idx, f in enumerate(uploaded_files):
         suffix = os.path.splitext(f.name)[1].lower()
+        file_ts = (base_ts - timedelta(seconds=step * idx)).isoformat()
 
         if suffix == ".pdf":
             tmp_path = _save_uploaded_to_temp(f, ".pdf")
@@ -284,6 +286,8 @@ def load_docs(uploaded_files):
                 loaded = loader.load()
                 for d in loaded:
                     d.metadata["display_name"] = f.name
+                    d.metadata["batch_id"] = batch_id
+                    d.metadata["timestamp"] = file_ts
                 docs.extend(loaded)
             finally:
                 os.unlink(tmp_path)
@@ -296,7 +300,7 @@ def load_docs(uploaded_files):
                 for d in loaded:
                     d.metadata["display_name"] = f.name
                     d.metadata["batch_id"] = batch_id
-                    d.metadata["timestamp"] = batch_ts
+                    d.metadata["timestamp"] = file_ts
                 docs.extend(loaded)
             finally:
                 os.unlink(tmp_path)
@@ -429,6 +433,12 @@ SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
 
 [문서 내용(샘플)]
 {content}
+
+요약/병합 규칙:
+- 동일 항목에서 서로 다른 값이 있으면 **문서 메타데이터의 timestamp가 가장 최근인 값만** 채택한다.
+- v1/v2 같은 **버전 라벨을 본문에 쓰지 말라**. 과거값은 '참고 근거'에만 필요시 요약-비교하라.
+- 즉, 최종 본문은 **최신 기준으로 병합된 단일 사양**만 적는다.
+
 
 원하는 출력 형식(마크다운):
 
@@ -563,20 +573,223 @@ with col_b:
         st.success("초기화 완료.")
 
 # ---------------------------------------
+# ✅ 모순(충돌) 감지/병합 규칙
+# ---------------------------------------
+
+# ---- 간단 규칙 기반 추출기 (숫자/부등호/단위 & 긍/부정 서술)
+NUM_PAT = re.compile(
+    r"(?P<key>[가-힣A-Za-z0-9\s\-/\(\)·]+?)\s*"
+    r"(?P<op>≥|<=|≤|>=|=|>|<|≈|~)?\s*"
+    r"(?P<val>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>mm|cm|m|W|kW|%|EA|MPa|CMH|A|V|mmH2O|dB\(A\))?",
+    flags=re.UNICODE,
+)
+NEG_PAT = re.compile(r"(금지|무|아님|아니다|없음|불가)")
+POS_PAT = re.compile(r"(필수|포함|설치|적용|필요|있음)")
+
+
+def _normalize_key(raw: str) -> str:
+    t = re.sub(r"[\s/()·]+", " ", raw).strip().lower()
+    # 너무 긴 키는 컷
+    return t[:120]
+
+
+def extract_facts(doc) -> list[dict]:
+    facts = []
+    text = doc.page_content
+    for m in NUM_PAT.finditer(text):
+        facts.append(
+            {
+                "type": "numeric",
+                "key": _normalize_key(m.group("key")),
+                "op": m.group("op") or "=",
+                "val": float(m.group("val")),
+                "unit": (m.group("unit") or "").lower(),
+                "source": doc.metadata.get("display_name", "document"),
+                "page": doc.metadata.get("page"),
+                "ts": doc.metadata.get("timestamp"),
+            }
+        )
+    # 서술형 (+/-) 존재성
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        key = _normalize_key(line)
+        if POS_PAT.search(line):
+            facts.append(
+                {
+                    "type": "bool",
+                    "key": key,
+                    "polarity": True,
+                    "source": doc.metadata.get("display_name", "document"),
+                    "page": doc.metadata.get("page"),
+                    "ts": doc.metadata.get("timestamp"),
+                }
+            )
+        if NEG_PAT.search(line):
+            facts.append(
+                {
+                    "type": "bool",
+                    "key": key,
+                    "polarity": False,
+                    "source": doc.metadata.get("display_name", "document"),
+                    "page": doc.metadata.get("page"),
+                    "ts": doc.metadata.get("timestamp"),
+                }
+            )
+    return facts
+
+
+def detect_conflicts(docs: list) -> dict:
+    """
+    반환:
+    {
+      "numeric_conflicts": [ {key, entries:[...], merged} ],
+      "boolean_conflicts": [ {key, positives:[...], negatives:[...], resolution} ],
+      "constraint_violations": [ {rule, evidence:[...]} ]
+    }
+    병합 규칙:
+      - 최신(timestamp 큰) 값을 우선
+      - 단위 동일 시 값이 다르면 '충돌'
+      - 부등호/조건 충돌도 표기
+    """
+    by_key_num = {}
+    by_key_bool = {}
+
+    for d in docs:
+        for f in extract_facts(d):
+            if f["type"] == "numeric":
+                by_key_num.setdefault((f["key"], f["unit"]), []).append(f)
+            else:
+                by_key_bool.setdefault(f["key"], []).append(f)
+
+    numeric_conflicts = []
+    for (key, unit), items in by_key_num.items():
+        # 서로 다른 값/연산자가 존재하면 충돌 후보
+        vals = {(it["op"], it["val"]) for it in items}
+        if len(vals) > 1:
+            # 최신 우선 병합안: 가장 최신 ts
+            items_sorted = sorted(items, key=lambda x: (x["ts"] or "",), reverse=True)
+            merged = {
+                "op": items_sorted[0]["op"],
+                "val": items_sorted[0]["val"],
+                "unit": unit,
+                "ts": items_sorted[0]["ts"],
+                "source": items_sorted[0]["source"],
+            }
+            numeric_conflicts.append(
+                {"key": key, "unit": unit, "entries": items_sorted, "merged": merged}
+            )
+
+    boolean_conflicts = []
+    for key, items in by_key_bool.items():
+        pos = [it for it in items if it["polarity"]]
+        neg = [it for it in items if not it["polarity"]]
+        if pos and neg:
+            # 최신 우선: 더 최신 쪽 채택
+            newest_pos_ts = max((p["ts"] or "" for p in pos), default="")
+            newest_neg_ts = max((n["ts"] or "" for n in neg), default="")
+            resolution = True if newest_pos_ts >= newest_neg_ts else False
+            boolean_conflicts.append(
+                {
+                    "key": key,
+                    "positives": pos,
+                    "negatives": neg,
+                    "resolution": resolution,  # True 채택/ False 채택
+                }
+            )
+
+    # 제약 위반: 간단 규칙 예) "A < B"인데 "= B" 등장
+    # 텍스트 기반이라 키 매핑이 어려워 보수적으로 탐지
+    constraint_violations = []
+    # 예시 규칙: 같은 key/unit에서 (< 또는 ≤) vs (= 또는 >, ≥)가 공존하고 값이 동일/역전
+    for (key, unit), items in by_key_num.items():
+        ops = set(it["op"] for it in items)
+        if any(op in ops for op in ["<", "≤"]) and any(
+            op in ops for op in ["=", ">", "≥"]
+        ):
+            # 간단: 값들의 min/max가 서로 모순인지 체크
+            vals = [it["val"] for it in items]
+            if vals:
+                mn, mx = min(vals), max(vals)
+                if mn == mx or mn > mx:
+                    constraint_violations.append(
+                        {
+                            "rule": f"{key} 제약 충돌({unit}): '< or ≤' 와 '= or > or ≥' 혼재",
+                            "evidence": items,
+                        }
+                    )
+
+    return {
+        "numeric_conflicts": numeric_conflicts,
+        "boolean_conflicts": boolean_conflicts,
+        "constraint_violations": constraint_violations,
+    }
+
+
+# ---------------------------------------
 # ✅ 업로드 직후 요약본 출력 (새 인덱스 우선)
 # ---------------------------------------
 if st.session_state.get("last_index_summary"):
     st.markdown("### 업로드 배치 요약본")
     st.markdown(st.session_state["last_index_summary"], unsafe_allow_html=True)
-    # 필요시 재생성(옵션 바꾼 후)
-    # if st.button("🔁 요약 다시 생성", help="이번 업로드 배치 내용을 기준으로 재요약"):
-    #     with st.spinner("요약 재생성 중..."):
-    #         st.session_state["last_index_summary"] = make_batch_summary(
-    #             st.session_state.get("last_index_batch_docs", []),
-    #             model=model_name,
-    #         )
-    #     st.success("요약을 갱신했습니다.")
-    #     st.markdown(st.session_state["last_index_summary"], unsafe_allow_html=True)
+
+conflicts = detect_conflicts(st.session_state["last_index_batch_docs"])
+st.session_state["last_batch_conflicts"] = conflicts
+
+if st.session_state.get("last_batch_conflicts"):
+    cf = st.session_state["last_batch_conflicts"]
+    st.markdown("#### 🧩 문서 충돌/모순 감지 결과")
+    with st.expander("🔎 상세 보기 (수치/서술/제약 위반)"):
+        # 수치형
+        st.markdown("**수치형 충돌 (numeric)**")
+        if cf["numeric_conflicts"]:
+            for c in cf["numeric_conflicts"]:
+                st.write(f"- 키: `{c['key']}` [{c['unit'] or '-'}]")
+                for e in c["entries"]:
+                    page = (e["page"] + 1) if isinstance(e["page"], int) else "N/A"
+                    st.write(
+                        f"   • {e['source']} p.{page}: {e['op']} {e['val']} {e['unit'] or ''} @ {e['ts']}"
+                    )
+                m = c["merged"]
+                st.write(
+                    f"   → **병합 권고(최신우선)**: {m['op']} {m['val']} {m['unit'] or ''} (from {m['source']}, {m['ts']})"
+                )
+        else:
+            st.write("- 없음")
+
+        st.markdown("---")
+        # 서술형
+        st.markdown("**서술/범주 충돌 (boolean)**")
+        if cf["boolean_conflicts"]:
+            for c in cf["boolean_conflicts"]:
+                st.write(f"- 키: `{c['key']}`")
+                st.write(
+                    "  • 긍정 근거 수: "
+                    + str(len(c["positives"]))
+                    + " / 부정 근거 수: "
+                    + str(len(c["negatives"]))
+                )
+                st.write(
+                    f"  → **채택(최신우선)**: {'긍정' if c['resolution'] else '부정'}"
+                )
+        else:
+            st.write("- 없음")
+
+        st.markdown("---")
+        # 제약 위반
+        st.markdown("**제약 위반 (constraints)**")
+        if cf["constraint_violations"]:
+            for v in cf["constraint_violations"]:
+                st.write(f"- {v['rule']}")
+                for e in v["evidence"]:
+                    page = (e["page"] + 1) if isinstance(e["page"], int) else "N/A"
+                    st.write(
+                        f"   • {e['source']} p.{page}: {e['op']} {e['val']} {e['unit'] or ''} @ {e['ts']}"
+                    )
+        else:
+            st.write("- 없음")
 
 
 # ---------------------------------------

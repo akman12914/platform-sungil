@@ -12,6 +12,108 @@ from typing import List, Tuple
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
+# === [ADD] 여러 형태의 섹션 헤더 줄바꿈 보정 ===
+HEADER_MARKERS = ("※", "■", "◆", "●", "▶", "▷", "▲", "▸", "•")
+BULLET_MARKERS = ("- ", "• ", "ㆍ", "·", "* ", "— ", "– ")
+
+HEADER_KEYWORDS = (
+    "개요",
+    "공사 범위",
+    "공사범위",
+    "견적조건",
+    "적용범위",
+    "UBR 공사분",
+    "재료",
+    "자재",
+    "치수",
+    "규격",
+    "시공 절차",
+    "시공절차",
+    "품질",
+    "검수",
+    "유의",
+    "유의사항",
+    "안전",
+    "기타",
+    "참고",
+    "근거",
+)
+
+_hdr_colon_re = re.compile(r"^\s*[^:：]{1,80}\s*[:：]\s*$")
+_hdr_number_re = re.compile(r"^\s*(제?\d+(?:\.\d+)*[)\.]?)\s+[^\s].{0,60}$")
+_hdr_keyword_re = re.compile(
+    r"^\s*(" + "|".join(map(re.escape, HEADER_KEYWORDS)) + r")\s*$"
+)
+
+
+def _is_header_line(s: str) -> bool:
+    s = s.strip()
+    if not s:
+        return False
+    if s.startswith(HEADER_MARKERS):  # 기호형 헤더
+        return True
+    if _hdr_colon_re.match(s):  # 콜론형 헤더 (예: "재료:")
+        return True
+    if _hdr_number_re.match(s):  # 번호형 헤더 (예: "1. 개요", "제2. 품질")
+        return True
+    if _hdr_keyword_re.match(s):  # 키워드 단독 헤더 (예: "공사 범위")
+        return True
+    return False
+
+
+def _is_bullet_line(s: str) -> bool:
+    ss = s.lstrip()
+    return any(ss.startswith(m) for m in BULLET_MARKERS)
+
+
+def _normalize_multiline_sections_enhanced(text: str) -> str:
+    """
+    PDF 추출 과정에서 헤더가 줄바꿈으로 끊긴 것을 보정.
+    - 헤더 라인 인식(기호/콜론/번호/키워드)
+    - 바로 다음 라인이 불릿/헤더/빈줄이 아니고 너무 길지 않으면(<=120자) 최대 3줄까지 이어붙임.
+    """
+    lines = text.splitlines()
+    out = []
+    buf = None
+    tail_joined = 0
+
+    for raw in lines:
+        s = raw.strip()
+
+        if _is_header_line(s):
+            if buf is not None:
+                out.append(buf)
+            buf = s
+            tail_joined = 0
+            continue
+
+        if buf is not None:
+            if (
+                s
+                and not _is_header_line(s)
+                and not _is_bullet_line(s)
+                and len(s) <= 120
+                and tail_joined < 3
+            ):
+                buf += " " + s
+                tail_joined += 1
+                continue
+            else:
+                out.append(buf)
+                buf = None
+                tail_joined = 0
+
+        out.append(raw)
+
+    if buf is not None:
+        out.append(buf)
+
+    return "\n".join(out)
+
+
+# === [/ADD] ===
+
+
 # LangChain (최신 구조)
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -288,6 +390,9 @@ def load_docs(uploaded_files):
                     d.metadata["display_name"] = f.name
                     d.metadata["batch_id"] = batch_id
                     d.metadata["timestamp"] = file_ts
+                    d.page_content = _normalize_multiline_sections_enhanced(
+                        d.page_content
+                    )
                 docs.extend(loaded)
             finally:
                 os.unlink(tmp_path)
@@ -301,6 +406,9 @@ def load_docs(uploaded_files):
                     d.metadata["display_name"] = f.name
                     d.metadata["batch_id"] = batch_id
                     d.metadata["timestamp"] = file_ts
+                    d.page_content = _normalize_multiline_sections_enhanced(
+                        d.page_content
+                    )
                 docs.extend(loaded)
             finally:
                 os.unlink(tmp_path)

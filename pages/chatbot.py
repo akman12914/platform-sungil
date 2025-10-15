@@ -273,7 +273,7 @@ if "last_index_summary" not in st.session_state:
 # ---------------------------------------
 with st.sidebar:
     st.markdown("### ⚙️ 옵션")
-    model_name = "gpt-5"
+    model_name = "gpt-5-mini"
     st.markdown("⚙️ LLM 모델: gpt-5")
     k_ctx = st.slider("검색 문서 수(k)", 2, 8, 4, 1)
     chunk_size = st.slider("청크 크기", 500, 2000, 1000, 100)
@@ -558,10 +558,10 @@ SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
 ---
 
 ### 📌 주요 사양
-- <strong>재료</strong>:
-- <strong>치수/규격</strong>:
-- <strong>시공 절차/순서</strong>:
-- <strong>품질/검수/유의</strong>:
+- **재료:**
+- **치수/규격:**
+- **시공 절차/순서:**
+- **품질/검수/유의:**
 
 ---
 
@@ -591,7 +591,7 @@ SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
 )
 
 
-def make_batch_summary(docs, model="gpt-5"):
+def make_batch_summary(docs, model="gpt-5-mini"):
     # 파일명 리스트
     names = []
     for d in docs:
@@ -843,61 +843,61 @@ if st.session_state.get("last_index_summary"):
     st.markdown("### 업로드 배치 요약본")
     st.markdown(st.session_state["last_index_summary"], unsafe_allow_html=True)
 
-conflicts = detect_conflicts(st.session_state["last_index_batch_docs"])
-st.session_state["last_batch_conflicts"] = conflicts
+# conflicts = detect_conflicts(st.session_state["last_index_batch_docs"])
+# st.session_state["last_batch_conflicts"] = conflicts
 
-if st.session_state.get("last_batch_conflicts"):
-    cf = st.session_state["last_batch_conflicts"]
-    st.markdown("#### 🧩 문서 충돌/모순 감지 결과")
-    with st.expander("🔎 상세 보기 (수치/서술/제약 위반)"):
-        # 수치형
-        st.markdown("**수치형 충돌 (numeric)**")
-        if cf["numeric_conflicts"]:
-            for c in cf["numeric_conflicts"]:
-                st.write(f"- 키: `{c['key']}` [{c['unit'] or '-'}]")
-                for e in c["entries"]:
-                    page = (e["page"] + 1) if isinstance(e["page"], int) else "N/A"
-                    st.write(
-                        f"   • {e['source']} p.{page}: {e['op']} {e['val']} {e['unit'] or ''} @ {e['ts']}"
-                    )
-                m = c["merged"]
-                st.write(
-                    f"   → **병합 권고(최신우선)**: {m['op']} {m['val']} {m['unit'] or ''} (from {m['source']}, {m['ts']})"
-                )
-        else:
-            st.write("- 없음")
+# if st.session_state.get("last_batch_conflicts"):
+#     cf = st.session_state["last_batch_conflicts"]
+#     st.markdown("#### 🧩 문서 충돌/모순 감지 결과")
+#     with st.expander("🔎 상세 보기 (수치/서술/제약 위반)"):
+#         # 수치형
+#         st.markdown("**수치형 충돌 (numeric)**")
+#         if cf["numeric_conflicts"]:
+#             for c in cf["numeric_conflicts"]:
+#                 st.write(f"- 키: `{c['key']}` [{c['unit'] or '-'}]")
+#                 for e in c["entries"]:
+#                     page = (e["page"] + 1) if isinstance(e["page"], int) else "N/A"
+#                     st.write(
+#                         f"   • {e['source']} p.{page}: {e['op']} {e['val']} {e['unit'] or ''} @ {e['ts']}"
+#                     )
+#                 m = c["merged"]
+#                 st.write(
+#                     f"   → **병합 권고(최신우선)**: {m['op']} {m['val']} {m['unit'] or ''} (from {m['source']}, {m['ts']})"
+#                 )
+#         else:
+#             st.write("- 없음")
 
-        st.markdown("---")
-        # 서술형
-        st.markdown("**서술/범주 충돌 (boolean)**")
-        if cf["boolean_conflicts"]:
-            for c in cf["boolean_conflicts"]:
-                st.write(f"- 키: `{c['key']}`")
-                st.write(
-                    "  • 긍정 근거 수: "
-                    + str(len(c["positives"]))
-                    + " / 부정 근거 수: "
-                    + str(len(c["negatives"]))
-                )
-                st.write(
-                    f"  → **채택(최신우선)**: {'긍정' if c['resolution'] else '부정'}"
-                )
-        else:
-            st.write("- 없음")
+#         st.markdown("---")
+#         # 서술형
+#         st.markdown("**서술/범주 충돌 (boolean)**")
+#         if cf["boolean_conflicts"]:
+#             for c in cf["boolean_conflicts"]:
+#                 st.write(f"- 키: `{c['key']}`")
+#                 st.write(
+#                     "  • 긍정 근거 수: "
+#                     + str(len(c["positives"]))
+#                     + " / 부정 근거 수: "
+#                     + str(len(c["negatives"]))
+#                 )
+#                 st.write(
+#                     f"  → **채택(최신우선)**: {'긍정' if c['resolution'] else '부정'}"
+#                 )
+#         else:
+#             st.write("- 없음")
 
-        st.markdown("---")
-        # 제약 위반
-        st.markdown("**제약 위반 (constraints)**")
-        if cf["constraint_violations"]:
-            for v in cf["constraint_violations"]:
-                st.write(f"- {v['rule']}")
-                for e in v["evidence"]:
-                    page = (e["page"] + 1) if isinstance(e["page"], int) else "N/A"
-                    st.write(
-                        f"   • {e['source']} p.{page}: {e['op']} {e['val']} {e['unit'] or ''} @ {e['ts']}"
-                    )
-        else:
-            st.write("- 없음")
+#         st.markdown("---")
+#         # 제약 위반
+#         st.markdown("**제약 위반 (constraints)**")
+#         if cf["constraint_violations"]:
+#             for v in cf["constraint_violations"]:
+#                 st.write(f"- {v['rule']}")
+#                 for e in v["evidence"]:
+#                     page = (e["page"] + 1) if isinstance(e["page"], int) else "N/A"
+#                     st.write(
+#                         f"   • {e['source']} p.{page}: {e['op']} {e['val']} {e['unit'] or ''} @ {e['ts']}"
+#                     )
+#         else:
+#             st.write("- 없음")
 
 
 # ---------------------------------------

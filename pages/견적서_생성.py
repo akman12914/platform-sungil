@@ -135,12 +135,16 @@ def convert_floor_data(floor_result: dict) -> dict:
     prices = floor_result.get("prices", {})
     단가 = prices.get("단가2", 0) or prices.get("단가1", 0)
 
+    # meta 정보 유지 (세대수 정보 포함)
+    meta = floor_result.get("meta", {})
+
     return {
         "재질": material_clean,
         "규격": floor_result.get("spec", ""),
         "수량": floor_result.get("qty", 1),
         "단가": 단가,
-        "주거약자": floor_result.get("meta", {}).get("inputs", {}).get("pve_kind", "") == "주거약자 (+480mm)"
+        "주거약자": meta.get("inputs", {}).get("pve_kind", "") == "주거약자 (+480mm)",
+        "meta": meta  # meta 정보 유지
     }
 
 def convert_wall_data(wall_result: dict) -> dict:
@@ -210,7 +214,7 @@ has_ceil = bool(ceil_result)
 
 # Status display
 st.markdown("### 계산 결과 상태")
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     status = "✅ 완료" if has_floor else "❌ 미완료"
     st.metric("바닥판", status)
@@ -220,6 +224,14 @@ with col2:
 with col3:
     status = "✅ 완료" if has_ceil else "❌ 미완료"
     st.metric("천장판", status)
+with col4:
+    # 바닥판 세대수 표시
+    units_display = 1
+    if floor_result:
+        meta = floor_result.get("meta", {})
+        inputs = meta.get("inputs", {})
+        units_display = int(inputs.get("units", 1))
+    st.metric("공사 세대수", f"{units_display}세대")
 
 if not (has_floor and has_wall and has_ceil):
     st.warning("⚠️ 바닥판, 벽판, 천장판 계산을 모두 완료한 후 견적서를 생성할 수 있습니다.")
@@ -475,19 +487,248 @@ if rows:
     grand_total = est_df["금액"].sum()
     st.metric("총 금액", f"{grand_total:,.0f} 원")
 
-    # Excel 다운로드
-    @st.cache_data(show_spinner=False)
-    def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    # Excel 다운로드 (LGE 창원 스마트파크 형식)
+    def df_to_excel_bytes(df: pd.DataFrame, total_units: int = 1) -> bytes:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "원자재 세대당 단가내역"
+
+        # A4 가로 형식 설정
+        ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.fitToPage = True
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0  # 높이는 자동
+
+        # 가운데 정렬을 위해 왼쪽 여백 컬럼 추가
+        LEFT_MARGIN = 3  # 왼쪽 여백 컬럼 수 (더 넓게)
+
+        # 스타일 정의
+        title_font = Font(name='맑은 고딕', size=18, bold=True)
+        subtitle_font = Font(name='맑은 고딕', size=11, bold=True)
+        header_font = Font(name='맑은 고딕', size=10, bold=True)
+        data_font = Font(name='맑은 고딕', size=9)
+        small_font = Font(name='맑은 고딕', size=8)
+
+        center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        left_align = Alignment(horizontal='left', vertical='center')
+        right_align = Alignment(horizontal='right', vertical='center')
+
+        # 투명 배경 (fill 제거)
+        no_fill = PatternFill(fill_type=None)
+
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+
+        # 여백 컬럼 설정
+        for i in range(1, LEFT_MARGIN + 1):
+            ws.column_dimensions[chr(64 + i)].width = 2
+
+        # 실제 시작 컬럼 (C부터)
+        START_COL = LEFT_MARGIN + 1
+
+        # 1행: 타이틀 - 가로로 넓게
+        title_range = f'{chr(64+START_COL)}1:{chr(64+START_COL+7)}1'
+        ws.merge_cells(title_range)
+        title_cell = ws.cell(1, START_COL)
+        title_cell.value = '욕실 원자재 세대당 단가 내역'
+        title_cell.font = title_font
+        title_cell.alignment = center_align
+        ws.row_dimensions[1].height = 30
+
+        # 2-3행: 빈 행
+        ws.row_dimensions[2].height = 10
+        ws.row_dimensions[3].height = 10
+
+        # 4행: 세대 정보 및 날짜
+        info_range = f'{chr(64+START_COL)}4:{chr(64+START_COL+2)}4'
+        ws.merge_cells(info_range)
+        info_cell = ws.cell(4, START_COL)
+        info_cell.value = f'총 세대수: {total_units}세대'
+        info_cell.font = subtitle_font
+        info_cell.alignment = left_align
+
+        date_range = f'{chr(64+START_COL+5)}4:{chr(64+START_COL+7)}4'
+        ws.merge_cells(date_range)
+        date_cell = ws.cell(4, START_COL+5)
+        date_cell.value = f"작성일: {datetime.now():%Y. %m. %d}"
+        date_cell.font = subtitle_font
+        date_cell.alignment = right_align
+
+        # 5행: 컬럼 헤더 (단일 세대 타입) - 테두리 추가, 배경 투명
+        # 품목 (C5:D5)
+        품목_range = f'{chr(64+START_COL)}5:{chr(64+START_COL+1)}5'
+        ws.merge_cells(품목_range)
+        ws.cell(5, START_COL).value = '품목'
+        ws.cell(5, START_COL).font = header_font
+        ws.cell(5, START_COL).alignment = center_align
+        for i in range(START_COL, START_COL+2):
+            ws.cell(5, i).border = thin_border
+
+        # 세대당 단가 (E5:G5)
+        세대당_range = f'{chr(64+START_COL+2)}5:{chr(64+START_COL+4)}5'
+        ws.merge_cells(세대당_range)
+        ws.cell(5, START_COL+2).value = '세대당 단가'
+        ws.cell(5, START_COL+2).font = header_font
+        ws.cell(5, START_COL+2).alignment = center_align
+        for i in range(START_COL+2, START_COL+5):
+            ws.cell(5, i).border = thin_border
+
+        # 총 금액 (H5:J5)
+        총금액_range = f'{chr(64+START_COL+5)}5:{chr(64+START_COL+7)}5'
+        ws.merge_cells(총금액_range)
+        ws.cell(5, START_COL+5).value = f'총 금액 ({total_units}세대)'
+        ws.cell(5, START_COL+5).font = header_font
+        ws.cell(5, START_COL+5).alignment = center_align
+        for i in range(START_COL+5, START_COL+8):
+            ws.cell(5, i).border = thin_border
+
+        # 6행: 세부 컬럼 헤더 (배경 투명)
+        headers_6 = ['대분류', '사양 및 규격', '수량', '단가', '금액', '수량', '단가', '금액']
+        for idx, header_text in enumerate(headers_6):
+            cell = ws.cell(6, START_COL + idx)
+            cell.value = header_text
+            cell.font = header_font
+            cell.alignment = center_align
+            cell.border = thin_border
+
+        # 컬럼 너비 설정 (가로로 넓게)
+        ws.column_dimensions[chr(64+START_COL)].width = 12   # 대분류
+        ws.column_dimensions[chr(64+START_COL+1)].width = 38 # 사양 및 규격
+        ws.column_dimensions[chr(64+START_COL+2)].width = 9  # 수량
+        ws.column_dimensions[chr(64+START_COL+3)].width = 13 # 단가
+        ws.column_dimensions[chr(64+START_COL+4)].width = 15 # 금액
+        ws.column_dimensions[chr(64+START_COL+5)].width = 9  # 수량(총)
+        ws.column_dimensions[chr(64+START_COL+6)].width = 13 # 단가(총)
+        ws.column_dimensions[chr(64+START_COL+7)].width = 17 # 금액(총)
+
+        # 데이터 행 작성
+        row_num = 7
+        current_category = None
+
+        for idx, row_data in df.iterrows():
+            품목 = str(row_data['품목'])
+            사양 = str(row_data['사양 및 규격'])
+            수량 = float(row_data['수량'])
+            단가 = float(row_data['단가'])
+            금액 = float(row_data['금액'])
+
+            # 대분류 (품목이 바뀔 때만 표시)
+            cell_a = ws.cell(row=row_num, column=START_COL)
+            if 품목 != current_category:
+                cell_a.value = 품목
+                current_category = 품목
+            else:
+                cell_a.value = ''
+            cell_a.font = data_font
+            cell_a.alignment = left_align
+            cell_a.border = thin_border
+
+            # 사양 및 규격
+            ws.cell(row=row_num, column=START_COL+1).value = 사양
+            ws.cell(row=row_num, column=START_COL+1).font = data_font
+            ws.cell(row=row_num, column=START_COL+1).alignment = left_align
+            ws.cell(row=row_num, column=START_COL+1).border = thin_border
+
+            # 세대당 단가 (C-E)
+            ws.cell(row=row_num, column=START_COL+2).value = 수량
+            ws.cell(row=row_num, column=START_COL+2).font = data_font
+            ws.cell(row=row_num, column=START_COL+2).alignment = right_align
+            ws.cell(row=row_num, column=START_COL+2).border = thin_border
+            ws.cell(row=row_num, column=START_COL+2).number_format = '#,##0.##'
+
+            ws.cell(row=row_num, column=START_COL+3).value = 단가
+            ws.cell(row=row_num, column=START_COL+3).font = data_font
+            ws.cell(row=row_num, column=START_COL+3).alignment = right_align
+            ws.cell(row=row_num, column=START_COL+3).border = thin_border
+            ws.cell(row=row_num, column=START_COL+3).number_format = '#,##0'
+
+            ws.cell(row=row_num, column=START_COL+4).value = 금액
+            ws.cell(row=row_num, column=START_COL+4).font = data_font
+            ws.cell(row=row_num, column=START_COL+4).alignment = right_align
+            ws.cell(row=row_num, column=START_COL+4).border = thin_border
+            ws.cell(row=row_num, column=START_COL+4).number_format = '#,##0'
+
+            # 총 금액 (F-H) - 세대수 곱하기
+            ws.cell(row=row_num, column=START_COL+5).value = 수량 * total_units
+            ws.cell(row=row_num, column=START_COL+5).font = data_font
+            ws.cell(row=row_num, column=START_COL+5).alignment = right_align
+            ws.cell(row=row_num, column=START_COL+5).border = thin_border
+            ws.cell(row=row_num, column=START_COL+5).number_format = '#,##0.##'
+
+            ws.cell(row=row_num, column=START_COL+6).value = 단가
+            ws.cell(row=row_num, column=START_COL+6).font = data_font
+            ws.cell(row=row_num, column=START_COL+6).alignment = right_align
+            ws.cell(row=row_num, column=START_COL+6).border = thin_border
+            ws.cell(row=row_num, column=START_COL+6).number_format = '#,##0'
+
+            ws.cell(row=row_num, column=START_COL+7).value = 금액 * total_units
+            ws.cell(row=row_num, column=START_COL+7).font = data_font
+            ws.cell(row=row_num, column=START_COL+7).alignment = right_align
+            ws.cell(row=row_num, column=START_COL+7).border = thin_border
+            ws.cell(row=row_num, column=START_COL+7).number_format = '#,##0'
+
+            row_num += 1
+
+        # 합계 행 (배경 투명)
+        ws.cell(row=row_num, column=START_COL).value = '합계'
+        ws.cell(row=row_num, column=START_COL).font = header_font
+        ws.cell(row=row_num, column=START_COL).alignment = center_align
+        ws.cell(row=row_num, column=START_COL).border = thin_border
+
+        ws.cell(row=row_num, column=START_COL+1).value = '(V.A.T 별도)'
+        ws.cell(row=row_num, column=START_COL+1).font = header_font
+        ws.cell(row=row_num, column=START_COL+1).alignment = center_align
+        ws.cell(row=row_num, column=START_COL+1).border = thin_border
+
+        # 세대당 합계
+        for col in [START_COL+2, START_COL+3]:
+            ws.cell(row=row_num, column=col).value = ''
+            ws.cell(row=row_num, column=col).border = thin_border
+
+        ws.cell(row=row_num, column=START_COL+4).value = df['금액'].sum()
+        ws.cell(row=row_num, column=START_COL+4).font = header_font
+        ws.cell(row=row_num, column=START_COL+4).alignment = right_align
+        ws.cell(row=row_num, column=START_COL+4).border = thin_border
+        ws.cell(row=row_num, column=START_COL+4).number_format = '#,##0'
+
+        # 총 합계
+        for col in [START_COL+5, START_COL+6]:
+            ws.cell(row=row_num, column=col).value = ''
+            ws.cell(row=row_num, column=col).border = thin_border
+
+        ws.cell(row=row_num, column=START_COL+7).value = df['금액'].sum() * total_units
+        ws.cell(row=row_num, column=START_COL+7).font = header_font
+        ws.cell(row=row_num, column=START_COL+7).alignment = right_align
+        ws.cell(row=row_num, column=START_COL+7).border = thin_border
+        ws.cell(row=row_num, column=START_COL+7).number_format = '#,##0'
+
+        # BytesIO로 저장
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="견적서")
+        wb.save(output)
+        output.seek(0)
         return output.getvalue()
 
-    xlsx_bytes = df_to_excel_bytes(est_df)
+    # 바닥판 세대수 추출
+    total_units = 1  # 기본값
+    if floor_data:
+        # floor_data 구조: {"meta": {"inputs": {"units": N}}}
+        meta = floor_data.get("meta", {})
+        inputs = meta.get("inputs", {})
+        total_units = int(inputs.get("units", 1))
+
+    xlsx_bytes = df_to_excel_bytes(est_df, total_units)
     st.download_button(
-        "📥 견적서 Excel 다운로드",
+        "📥 견적서 Excel 다운로드 (LGE 형식)",
         data=xlsx_bytes,
-        file_name=f"estimate_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+        file_name=f"욕실_원자재_세대당_단가내역_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 

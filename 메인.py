@@ -1,19 +1,4 @@
-import os, json
-from datetime import datetime
-from pathlib import Path
 import streamlit as st
-
-FLOOR_DONE_KEY = "floor_done"
-FLOOR_RESULT_KEY = "floor_result"
-
-WALL_DONE_KEY  = "wall_done"
-WALL_RESULT_KEY = "wall_result"
-
-CEIL_DONE_KEY  = "ceil_done"
-CEIL_RESULT_KEY = "ceil_result"
-
-EXPORT_DIR = "exports"
-os.makedirs(EXPORT_DIR, exist_ok=True)
 
 
 # 안전한 set_page_config
@@ -173,75 +158,4 @@ with c5:
         "pages/chatbot.py",
         label="💬 시방서 Q&A\nAI 챗봇 (PDF 검색)",
         icon=None,
-    )
-
-
-st.divider()
-st.header("통합 JSON 내보내기")
-
-floor_data = st.session_state.get(FLOOR_RESULT_KEY)
-wall_data  = st.session_state.get(WALL_RESULT_KEY)
-ceil_data  = st.session_state.get(CEIL_RESULT_KEY)
-
-has_floor = bool(floor_data)
-has_wall  = bool(wall_data)
-has_ceil  = bool(ceil_data)
-all_ready = has_floor and has_wall and has_ceil
-
-def _pill(ok: bool, label: str, color_ok="#16a34a", color_no="#dc2626"):
-    color = color_ok if ok else color_no
-    text  = "있음" if ok else "없음"
-    return f"""
-    <span style="
-      display:inline-block;padding:4px 10px;margin-right:8px;border-radius:999px;
-      background:{color}15;color:{color};border:1px solid {color}33;font-weight:700;font-size:.9rem;">
-      {label}: {text}
-    </span>"""
-
-# 상태 뱃지 출력
-st.markdown(
-    _pill(has_floor, "바닥") + _pill(has_wall, "벽") + _pill(has_ceil, "천장"),
-    unsafe_allow_html=True,
-)
-
-combined = {
-    "exported_at": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
-    "floor": floor_data,
-    "wall":  wall_data,
-    "ceil":  ceil_data,
-}
-
-def _export_all_json():
-    # 호출 시점의 최신 세션으로 다시 조립 (안전)
-    _combined = {
-        "exported_at": f"{datetime.now():%Y-%m-%d %H:%M:%S}",
-        "floor": st.session_state.get(FLOOR_RESULT_KEY),
-        "wall":  st.session_state.get(WALL_RESULT_KEY),
-        "ceil":  st.session_state.get(CEIL_RESULT_KEY),
-    }
-    if not (_combined["floor"] and _combined["wall"] and _combined["ceil"]):
-        st.warning("세 결과가 모두 있어야 내보낼 수 있습니다.")
-        return
-    fname = f"all_{datetime.now():%Y%m%d_%H%M%S}.json"
-    path = os.path.join(EXPORT_DIR, fname)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(_combined, f, ensure_ascii=False, indent=2)
-    st.success(f"통합 JSON 내보냈습니다: {path}")
-
-colA, colB = st.columns(2)
-with colA:
-    st.button(
-        "💾 통합 JSON 파일로 저장",
-        on_click=_export_all_json,
-        key="btn_export_all",
-        disabled=not all_ready,        # ⬅️ 세 개 다 있을 때만 활성화
-    )
-with colB:
-    st.download_button(
-        "⬇️ 통합 JSON 다운로드 (브라우저)",
-        data=json.dumps(combined, ensure_ascii=False, indent=2).encode("utf-8"),
-        file_name="all.json",
-        mime="application/json",
-        key="btn_download_all",
-        disabled=not all_ready,        # ⬅️ 세 개 다 있을 때만 활성화
     )

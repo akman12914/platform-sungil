@@ -1,6 +1,8 @@
 # 욕실 견적서 생성기
 # session_state 연동 버전 - 바닥/벽/천장 계산 결과를 자동으로 가져옵니다.
 
+from common_styles import apply_common_styles, set_page_config
+
 import json
 import io
 from typing import Dict, Any, List, Optional
@@ -13,53 +15,8 @@ FLOOR_RESULT_KEY = "floor_result"
 WALL_RESULT_KEY = "wall_result"
 CEIL_RESULT_KEY = "ceil_result"
 
-# ----------------------------
-# Dark Sidebar Styling
-# ----------------------------
-def _design_refresh():
-    st.markdown(
-        """
-    <style>
-      :root{
-        --sb-bg:#0b1220;
-        --sb-fg:#e2e8f0;
-        --sb-muted:#cbd5e1;
-        --sb-line:#1f2a44;
-        --accent:#f1f5f9;
-        --accent-2:#cbd5e1;
-        --ink:#0f172a;
-        --muted:#475569;
-        --line:#e2e8f0;
-      }
-      section[data-testid="stSidebar"]{
-        background:var(--sb-bg)!important;
-        color:var(--sb-fg)!important;
-        border-right:1px solid var(--sb-line);
-      }
-      section[data-testid="stSidebar"] *{ color:var(--sb-fg)!important; }
-      section[data-testid="stSidebar"] .stMarkdown p,
-      section[data-testid="stSidebar"] label{
-        color:var(--sb-muted)!important;
-        font-weight:600!important;
-      }
-      [data-testid="stAppViewContainer"] .stButton>button{
-        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
-        color:#001018!important;
-        border:0!important;
-        font-weight:800!important;
-        letter-spacing:.2px;
-      }
-      [data-testid="stAppViewContainer"] .stButton>button:hover{
-        filter:brightness(1.05);
-      }
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-_design_refresh()
-
-st.set_page_config(page_title="욕실 견적서 생성기", layout="wide")
+set_page_config(page_title="욕실 견적서 생성기", layout="wide")
+apply_common_styles()
 
 # ----------------------------
 # Helper Functions

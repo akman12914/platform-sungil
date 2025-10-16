@@ -5,223 +5,32 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Any
 
-# --- design refresh (prettier inline) ---
+# --- Common Styles ---
+from common_styles import apply_common_styles, set_page_config
+
+# --- Streamlit ---
 import streamlit as st
+set_page_config(page_title="벽판 계산기", layout="wide")
+apply_common_styles()
 
-
-def _design_refresh(title: str, subtitle: str = ""):
-    try:
-        st.set_page_config(page_title=title, layout="wide")
-    except Exception:
-        pass
-    st.markdown(
-        """
-    <style>
-      :root{
-        /* Sidebar dark palette */
-        --sb-bg:#0b1220;         /* 다크 네이비 */
-        --sb-fg:#e2e8f0;         /* 본문 텍스트 */
-        --sb-muted:#475569;      /* 🔸보조 텍스트: 더 밝게/진하게 */
-        --sb-line:#1f2a44;
-
-
-        --accent:#f1f5f9;   /* 거의 흰색 (상단) */
-        --accent-2:#cbd5e1; /* 밝은 회색 (하단) */
-
-        /* Main content neutrals */
-        --ink:#0f172a;
-        --muted:#475569;
-        --line:#e2e8f0;
-      }
-
-      /* Sidebar Dark */
-      section[data-testid="stSidebar"]{
-        background:var(--sb-bg)!important; color:var(--sb-fg)!important;
-        border-right:1px solid var(--sb-line);
-      }
-      section[data-testid="stSidebar"] *{ color:var(--sb-fg)!important; }
-      section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h2,section[data-testid="stSidebar"] h3{
-        color:var(--sb-fg)!important;
-      }
-
-      /* 🔸보조 텍스트/라벨: 더 선명 + 약간 굵게 */
-      section[data-testid="stSidebar"] .stMarkdown p,
-      section[data-testid="stSidebar"] label,
-      section[data-testid="stSidebar"] .stSelectbox label{
-        color:var(--sb-muted)!important;
-        font-weight:600!important;
-      }
-
-      /* Inputs in sidebar */
-      section[data-testid="stSidebar"] input,
-      section[data-testid="stSidebar"] textarea,
-      section[data-testid="stSidebar"] select,
-      section[data-testid="stSidebar"] .stTextInput input,
-      section[data-testid="stSidebar"] .stNumberInput input{
-        background:rgba(255,255,255,0.06)!important;
-        border:1px solid var(--sb-line)!important;
-        color:var(--sb-muted)!important;
-      }
-
-      /* 🔧 Slider cutoff fix */
-      section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ padding-right:12px; }
-      section[data-testid="stSidebar"] div[data-testid="stSlider"]{
-        padding-right:12px; margin-right:2px; overflow:visible;
-      }
-      section[data-testid="stSidebar"] div[role="slider"]{
-        box-shadow:0 0 0 2px rgba(20,184,166,0.25); border-radius:999px;
-      }
-
-      /* ✅ Radio: 색/정렬 깔끔하게 (red → teal, 정중앙 정렬) */
-      /* Streamlit 라디오 인풋 컬러를 액센트로 통일 */
-      input[type="radio"]{ accent-color: var(--accent); }
-      /* 라벨/원형이 수직 중앙 정렬되도록 라벨 플렉스 정렬 */
-      div[role="radiogroup"] label{
-        display:flex; align-items:center; gap:.5rem;
-        line-height:1.2; margin: .1rem 0;
-      }
-      /* 일부 환경에서 라디오 원이 1px 내려가 보이는 현상 보정 */
-      div[role="radiogroup"] input[type="radio"]{
-        transform: translateY(0px);
-      }
-
-      /* Buttons (sidebar/main 공통) */
-      section[data-testid="stSidebar"] .stButton>button,
-      [data-testid="stAppViewContainer"] .stButton>button{
-        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
-        color:#0f172a !important;
-        border:0!important; font-weight:800!important; letter-spacing:.2px;
-        border-radius:10px; padding:.55rem 1rem;
-      }
-      section[data-testid="stSidebar"] .stButton>button:hover,
-      [data-testid="stAppViewContainer"] .stButton>button:hover{
-        filter:brightness(1.05);
-      }
-
-      /* 이미지 여백 (겹침 방지) */
-      [data-testid="stImage"]{ margin:6px 0 18px!important; }
-      [data-testid="stImage"] img{ display:block; }
-
-        span[label="app main"] {
-      font-size: 0 !important;          /* 기존 글자 숨김 */
-      position: relative;
-  }
-  span[label="app main"]::after {
-      content: "메인";                  /* 원하는 표시 이름 */
-      font-size: 1rem !important;       /* 기본 폰트 크기로 복원 */
-      color: #fff !important;           /* 사이드바 글씨 색 (흰색) */
-      font-weight: 700 !important;      /* 굵게 */
-      position: absolute;
-      left: 0;
-      top: 0;
-  }
-
-        /* NumberInput - stepper 버튼 아이콘 색상 */
-      button[data-testid="stNumberInputStepUp"] svg,
-      button[data-testid="stNumberInputStepDown"] svg {
-          color: var(--sb-muted) !important;   /* 보조색 */
-          fill: var(--sb-muted) !important;    /* 일부 환경에서 필요 */
-      }
-
-      /* 버튼 자체 hover/focus 시에도 색 유지 */
-      button[data-testid="stNumberInputStepUp"]:hover svg,
-      button[data-testid="stNumberInputStepDown"]:hover svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
-      }
-
-            /* Selectbox: 선택된 값 텍스트 */
-      div[data-baseweb="select"] div[role="combobox"],
-      div[data-baseweb="select"] div[role="combobox"] input,
-      div[data-baseweb="select"] div[value] {
-          color: var(--sb-muted) !important;   /* 보조색 */
-          font-weight: 600 !important;         /* 조금 더 굵게 */
-      }
-
-      /* Selectbox: 드롭다운 아이콘 (열림/닫힘 화살표) */
-      div[data-baseweb="select"] svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
-      }
-
-      /* Hover 시에도 색 유지 */
-      div[data-baseweb="select"]:hover div[value],
-      div[data-baseweb="select"]:hover svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
-      }
-
-            /* 🔹 FileUploader 전체 영역 */
-      section[data-testid="stFileUploaderDropzone"] {
-          border: 2px dashed var(--sb-line) !important;
-          background: rgba(255,255,255,0.03) !important;
-          color: var(--sb-muted) !important;
-          border-radius: 10px !important;
-          padding: 12px !important;
-      }
-
-      /* 아이콘 색상 */
-      section[data-testid="stFileUploaderDropzone"] svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
-      }
-
-      /* 안내 텍스트 */
-      section[data-testid="stFileUploaderDropzone"] span {
-          color: var(--sb-muted) !important;
-          font-weight: 600 !important;
-      }
-
-      /* 버튼 */
-      section[data-testid="stFileUploaderDropzone"] button {
-          background: linear-gradient(180deg,var(--accent),var(--accent-2)) !important;
-          color: #001018 !important;
-          border: 0 !important;
-          font-weight: 700 !important;
-          border-radius: 8px !important;
-          padding: .4rem .9rem !important;
-      }
-      section[data-testid="stFileUploaderDropzone"] button:hover {
-          filter: brightness(1.05);
-      }
-
-            /* 계산하기 버튼 텍스트 색 변경 */
-      button[data-testid="stBaseButton-primary"] p {
-          color: var(--ink) !important;  /* 보조색 계열 */
-          font-weight: 700 !important;        /* 더 굵게 */
-      }
-
-
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-
-# --- end design refresh ---
-
-_design_refresh("벽판 계산기", "UI 정리 · 사이드바 유지")
-
-import streamlit as st
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
-# (파일 상단 import들 아래 어딘가)
 import os, json
 from datetime import datetime
+
 EXPORT_DIR = "exports"
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 def _save_json(path:str, data:dict):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
 try:
-    FONT = ImageFont.truetype("NanumGothic.ttf", 16)   # 16~18 추천
+    FONT = ImageFont.truetype("NanumGothic.ttf", 16)
     FONT_SMALL = ImageFont.truetype("NanumGothic.ttf", 14)
 except Exception:
     FONT = ImageFont.load_default()
     FONT_SMALL = ImageFont.load_default()
-
-st.set_page_config(page_title="벽판 규격/개수 산출 (통합, New Engine)", layout="wide")
 
 # =========================================================
 # 0) 공통 유틸
@@ -1379,32 +1188,3 @@ else:
                 st.warning(f"벽판 결과 자동저장 중 오류: {_e}")
 
 st.caption("※ 새 엔진 적용: 2400 모듈 + 가로/세로 발란스 규칙 통합, 최대 9600까지 확장. 젠다이 높이/깊이·단차·접벽 로직 유지. 설치공간은 정면도 검정 오버레이로만 표시하며 집계에서 제외됩니다.")
-
-
-# ------- 벽 결과 내보내기 -------
-st.divider()
-st.subheader("벽 결과 내보내기")
-
-def _export_wall_json():
-    data = st.session_state.get("wall_result")
-    if not data:
-        st.warning("먼저 계산을 실행해 자동저장을 생성하세요.")
-        return
-    fname = f"wall_{datetime.now():%Y%m%d_%H%M%S}.json"
-    path = os.path.join(EXPORT_DIR, fname)
-    _save_json(path, data)
-    st.success(f"JSON 내보냈습니다: {path}")
-
-col_e1, col_e2 = st.columns(2)
-with col_e1:
-    st.button("💾 JSON 내보내기 (파일로 저장)", on_click=_export_wall_json, key="btn_export_wall")
-with col_e2:
-    _data = st.session_state.get("wall_result") or {}
-    st.download_button(
-        "⬇️ JSON 다운로드 (브라우저)",
-        data=json.dumps(_data, ensure_ascii=False, indent=2).encode("utf-8"),
-        file_name="wall.json",
-        mime="application/json",
-        key="btn_download_wall",
-        disabled=not bool(_data),
-    )

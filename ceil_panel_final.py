@@ -7,13 +7,27 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 import os, json
 from datetime import datetime
+
+# --- Common Styles ---
+from common_styles import apply_common_styles, set_page_config
+
+# --- Streamlit ---
+import streamlit as st
+import streamlit.components.v1 as components
+import numpy as np
+import pandas as pd
+
+set_page_config(page_title="천장판 최적 조합", layout="wide")
+apply_common_styles()
+
 EXPORT_DIR = "exports"
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 def _save_json(path: str, data: dict):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-def candidate_to_dict(c: Candidate) -> Dict[str, Any]:
+
+def candidate_to_dict(c: 'Candidate') -> Dict[str, Any]:
     return {
         "pattern": list(c.pattern),
         "oriented": [
@@ -39,163 +53,6 @@ def candidate_to_dict(c: Candidate) -> Dict[str, Any]:
         "cut_cost": int(c.cut_cost),
         "total_cost": int(c.total_cost),
     }
-
-# --- design refresh (prettier inline) ---
-import streamlit as st
-
-
-def _design_refresh():
-
-    st.markdown(
-        """
-    <style>
-      :root{
-        /* Sidebar dark palette */
-        --sb-bg:#0b1220;         /* 다크 네이비 */
-        --sb-fg:#e2e8f0;         /* 본문 텍스트 */
-        --sb-muted:#475569;      /* 🔸보조 텍스트: 더 밝게/진하게 */
-        --sb-line:#1f2a44;
-
-        /* Accents: 시안 → 더 어울리는 Teal 계열 */
-        --accent:#f1f5f9;   /* 거의 흰색 (상단) */
-        --accent-2:#cbd5e1; /* 밝은 회색 (하단) */
-
-        /* Main content neutrals */
-        --ink:#0f172a;
-        --muted:#475569;
-        --line:#e2e8f0;
-      }
-
-      /* Sidebar Dark */
-      section[data-testid="stSidebar"]{
-        background:var(--sb-bg)!important; color:var(--sb-fg)!important;
-        border-right:1px solid var(--sb-line);
-      }
-      section[data-testid="stSidebar"] *{ color:var(--sb-fg)!important; }
-      section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h2,section[data-testid="stSidebar"] h3{
-        color:var(--sb-fg)!important;
-      }
-
-      /* 🔸보조 텍스트/라벨: 더 선명 + 약간 굵게 */
-      section[data-testid="stSidebar"] .stMarkdown p,
-      section[data-testid="stSidebar"] label,
-      section[data-testid="stSidebar"] .stSelectbox label{
-        color:var(--muted)!important;
-        font-weight:600!important;
-      }
-
-      /* Inputs in sidebar */
-      section[data-testid="stSidebar"] input,
-      section[data-testid="stSidebar"] textarea,
-      section[data-testid="stSidebar"] select,
-      section[data-testid="stSidebar"] .stTextInput input,
-      section[data-testid="stSidebar"] .stNumberInput input{
-        background:rgba(255,255,255,0.06)!important;
-        border:1px solid var(--sb-line)!important;
-        color:var(--muted)!important;
-      }
-
-      /* 🔧 Slider cutoff fix */
-      section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ padding-right:12px; }
-      section[data-testid="stSidebar"] div[data-testid="stSlider"]{
-        padding-right:12px; margin-right:2px; overflow:visible;
-      }
-      section[data-testid="stSidebar"] div[role="slider"]{
-        box-shadow:0 0 0 2px rgba(20,184,166,0.25); border-radius:999px;
-      }
-
-      /* ✅ Radio: 색/정렬 깔끔하게 (red → teal, 정중앙 정렬) */
-      /* Streamlit 라디오 인풋 컬러를 액센트로 통일 */
-      input[type="radio"]{ accent-color: var(--accent); }
-      /* 라벨/원형이 수직 중앙 정렬되도록 라벨 플렉스 정렬 */
-      div[role="radiogroup"] label{
-        display:flex; align-items:center; gap:.5rem;
-        line-height:1.2; margin: .1rem 0;
-      }
-      /* 일부 환경에서 라디오 원이 1px 내려가 보이는 현상 보정 */
-      div[role="radiogroup"] input[type="radio"]{
-        transform: translateY(0px);
-      }
-
-      /* Buttons (sidebar/main 공통) */
-      section[data-testid="stSidebar"] .stButton>button,
-      [data-testid="stAppViewContainer"] .stButton>button{
-        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
-        color:#001018!important;
-        border:0!important; font-weight:800!important; letter-spacing:.2px;
-        border-radius:10px; padding:.55rem 1rem;
-      }
-      section[data-testid="stSidebar"] .stButton>button:hover,
-      [data-testid="stAppViewContainer"] .stButton>button:hover{
-        filter:brightness(1.05);
-      }
-
-      /* 이미지 여백 (겹침 방지) */
-      [data-testid="stImage"]{ margin:6px 0 18px!important; }
-      [data-testid="stImage"] img{ display:block; }
-
-        span[label="app main"] {
-      font-size: 0 !important;          /* 기존 글자 숨김 */
-      position: relative;
-  }
-  span[label="app main"]::after {
-      content: "메인";                  /* 원하는 표시 이름 */
-      font-size: 1rem !important;       /* 기본 폰트 크기로 복원 */
-      color: #fff !important;           /* 사이드바 글씨 색 (흰색) */
-      font-weight: 700 !important;      /* 굵게 */
-      position: absolute;
-      left: 0;
-      top: 0;
-  }
-
-        /* 🔹 FileUploader 전체 영역 */
-      section[data-testid="stFileUploaderDropzone"] {
-          border: 2px dashed var(--sb-line) !important;
-          background: rgba(255,255,255,0.03) !important;
-          color: var(--sb-muted) !important;
-          border-radius: 10px !important;
-          padding: 12px !important;
-      }
-
-      /* 아이콘 색상 */
-      section[data-testid="stFileUploaderDropzone"] svg {
-          color: var(--sb-muted) !important;
-          fill: var(--sb-muted) !important;
-      }
-
-      /* 안내 텍스트 */
-      section[data-testid="stFileUploaderDropzone"] span {
-          color: var(--sb-muted) !important;
-          font-weight: 600 !important;
-      }
-
-      /* 버튼 */
-      section[data-testid="stFileUploaderDropzone"] button {
-          background: linear-gradient(180deg,var(--accent),var(--accent-2)) !important;
-          color: #001018 !important;
-          border: 0 !important;
-          font-weight: 700 !important;
-          border-radius: 8px !important;
-          padding: .4rem .9rem !important;
-      }
-      section[data-testid="stFileUploaderDropzone"] button:hover {
-          filter: brightness(1.05);
-      }
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-
-# --- end design refresh ---
-
-_design_refresh()
-
-
-import numpy as np
-import pandas as pd
-import streamlit as st
-import streamlit.components.v1 as components
 
 # =========================================================
 # 설정 / 상수
@@ -1156,34 +1013,3 @@ else:
         st.success("천장 결과 자동저장 완료")
     except Exception as _e:
         st.warning(f"천장 결과 자동저장 중 오류: {_e}")
-
-
-
-
-# ------- 천장 결과 내보내기 -------
-st.divider()
-st.subheader("천장 결과 내보내기")
-
-def _export_ceil_json():
-    data = st.session_state.get(CEIL_RESULT_KEY)
-    if not data:
-        st.warning("먼저 계산을 실행해 자동저장을 생성하세요.")
-        return
-    fname = f"ceil_{datetime.now():%Y%m%d_%H%M%S}.json"
-    path = os.path.join(EXPORT_DIR, fname)
-    _save_json(path, data)
-    st.success(f"JSON 내보냈습니다: {path}")
-
-col_e1, col_e2 = st.columns(2)
-with col_e1:
-    st.button("💾 JSON 내보내기 (파일로 저장)", on_click=_export_ceil_json, key="btn_export_ceil")
-with col_e2:
-    _data = st.session_state.get(CEIL_RESULT_KEY) or {}
-    st.download_button(
-        "⬇️ JSON 다운로드 (브라우저)",
-        data=json.dumps(_data, ensure_ascii=False, indent=2).encode("utf-8"),
-        file_name="ceil.json",
-        mime="application/json",
-        key="btn_download_ceil",
-        disabled=not bool(_data),
-    )

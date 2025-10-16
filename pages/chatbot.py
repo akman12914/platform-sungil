@@ -1,3 +1,5 @@
+from common_styles import apply_common_styles, set_page_config
+
 import os
 import tempfile
 import shutil
@@ -123,128 +125,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain.schema import Document
 
-
-def _sidebar_dark_and_slider_fix():
-    st.markdown(
-        """
-    <style>
-      :root{
-        /* Sidebar dark palette */
-        --sb-bg:#0b1220;
-        --sb-fg:#e2e8f0;
-        --sb-muted:#e5e7eb;
-        --sb-line:#1f2a44;
-
-        --accent:#f1f5f9;
-        --accent-2:#cbd5e1;
-
-        /* Main content neutrals */
-        --ink:#0f172a;
-        --muted:#475569;
-        --line:#e2e8f0;
-      }
-
-      /* Sidebar Dark */
-      section[data-testid="stSidebar"]{
-        background:var(--sb-bg)!important; color:var(--sb-fg)!important;
-        border-right:1px solid var(--sb-line);
-      }
-      section[data-testid="stSidebar"] *{ color:var(--sb-fg)!important; }
-      section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h2,section[data-testid="stSidebar"] h3{
-        color:var(--sb-fg)!important;
-      }
-
-      /* helper labels */
-      section[data-testid="stSidebar"] .stMarkdown p,
-      section[data-testid="stSidebar"] label,
-      section[data-testid="stSidebar"] .stSelectbox label{
-        color:var(--sb-muted)!important;
-        font-weight:600!important;
-      }
-
-      /* Inputs in sidebar */
-      section[data-testid="stSidebar"] input,
-      section[data-testid="stSidebar"] textarea,
-      section[data-testid="stSidebar"] select,
-      section[data-testid="stSidebar"] .stTextInput input,
-      section[data-testid="stSidebar"] .stNumberInput input{
-        background:rgba(255,255,255,0.06)!important;
-        border:1px solid var(--sb-line)!important;
-      }
-
-      /* Slider cutoff fix */
-      section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ padding-right:12px; }
-      section[data-testid="stSidebar"] div[data-testid="stSlider"]{
-        padding-right:12px; margin-right:2px; overflow:visible;
-      }
-      section[data-testid="stSidebar"] div[role="slider"]{
-        box-shadow:0 0 0 1px rgba(20,184,166,0.25); border-radius:999px;
-      }
-
-      input[type="radio"]{ accent-color: var(--accent); }
-      div[role="radiogroup"] label{
-        display:flex; align-items:center; gap:.5rem;
-        line-height:1.2; margin: .1rem 0;
-      }
-
-      section[data-testid="stSidebar"] .stButton>button,
-      [data-testid="stAppViewContainer"] .stButton>button{
-        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
-        color:#001018!important;
-        border:0!important; font-weight:800!important; letter-spacing:.2px;
-        border-radius:10px; padding:.55rem 1rem;
-      }
-      section[data-testid="stSidebar"] .stButton>button:hover,
-      [data-testid="stAppViewContainer"] .stButton>button:hover{
-        filter:brightness(1.05);
-      }
-
-      [data-testid="stImage"]{ margin:6px 0 18px!important; }
-      [data-testid="stImage"] img{ display:block; }
-
-      /* 사이드바 페이지 라벨 바꾸기 (예시) */
-      span[label="app main"] { font-size:0 !important; position:relative; }
-      span[label="app main"]::after {
-        content:"메인"; font-size:1rem !important; color:#fff !important; font-weight:700 !important;
-        position:absolute; left:0; top:0;
-      }
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-
-# call once
-_sidebar_dark_and_slider_fix()
-
-# 요약 카드 공통 스타일 (둥근 모서리 + 그림자)
-st.markdown(
-    """
-<style>
-  .summary-card{
-    border:1px solid var(--line);
-    border-radius:14px;
-    padding:16px 20px;
-    background:#ffffff;
-    margin-top:.5rem;
-    margin-bottom:3.5rem;
-  }
-  /* 카드 내부 elements 살짝 정돈 */
-  .summary-card h1, .summary-card h2, .summary-card h3{ margin-top:.6rem; }
-  .summary-card hr{ border:none; border-top:1px solid #e5e7eb; margin:12px 0; }
-  .summary-card details{
-    margin-top:.5rem;
-    background:#f8fafc;
-    border:1px solid #e2e8f0;
-    border-radius:10px;
-    padding:.5rem .75rem;
-  }
-  .summary-card summary{ cursor:pointer; font-weight:700; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
 # ---------------------------------------
 # 환경설정
 # ---------------------------------------
@@ -252,7 +132,9 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 assert OPENAI_API_KEY, "OPENAI_API_KEY가 .env에 없습니다."
 
-st.set_page_config(page_title="시방서 Q&A 챗봇", page_icon="🛁", layout="wide")
+set_page_config(page_title="시방서 Q&A 챗봇", page_icon="🛁", layout="wide")
+apply_common_styles()
+
 st.title("🛁 시방서 Q&A 챗봇")
 
 # ---------------------------------------

@@ -3,9 +3,13 @@ import io
 import os, glob,json
 from typing import Optional, Dict, Any
 
+# --- Common Styles ---
+from common_styles import apply_common_styles, set_page_config
+
 # --- Streamlit ---
 import streamlit as st
-st.set_page_config(page_title="바닥판 규격/옵션 산출", layout="wide")
+set_page_config(page_title="바닥판 규격/옵션 산출", layout="wide")
+apply_common_styles()
 
 # --- Pillow / Image ---
 from PIL import Image, ImageDraw, ImageFont
@@ -97,184 +101,6 @@ def _get_font(size: int = 16) -> ImageFont.ImageFont:
 
     # 3) 최후: 기본 비트맵 폰트(한글은 각질 수 있음)
     return ImageFont.load_default()
-
-
-def _design_refresh():
-    st.markdown(
-        """
-    <style>
-      :root{
-        /* Sidebar dark palette */
-        --sb-bg:#0b1220;
-        --sb-fg:#e2e8f0;
-        --sb-muted:#475569;
-        --sb-line:#1f2a44;
-
-        --accent:#f1f5f9;
-        --accent-2:#cbd5e1;
-
-        /* Main content neutrals */
-        --ink:#0f172a;
-        --muted:#475569;
-        --line:#e2e8f0;
-      }
-
-      /* Sidebar Dark */
-      section[data-testid="stSidebar"]{
-        background:var(--sb-bg)!important; color:var(--sb-fg)!important;
-        border-right:1px solid var(--sb-line);
-      }
-      section[data-testid="stSidebar"] *{ color:var(--sb-fg)!important; }
-      section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h2,section[data-testid="stSidebar"] h3{
-        color:var(--sb-fg)!important;
-      }
-
-      /* 보조 텍스트/라벨 */
-      section[data-testid="stSidebar"] .stMarkdown p,
-      section[data-testid="stSidebar"] label,
-      section[data-testid="stSidebar"] .stSelectbox label{
-        color:var(--sb-muted)!important;
-        font-weight:600!important;
-      }
-
-      /* Inputs in sidebar */
-      section[data-testid="stSidebar"] input,
-      section[data-testid="stSidebar"] textarea,
-      section[data-testid="stSidebar"] select,
-      section[data-testid="stSidebar"] .stTextInput input,
-      section[data-testid="stSidebar"] .stNumberInput input{
-        background:rgba(255,255,255,0.06)!important;
-        border:1px solid var(--sb-line)!important;
-        color:var(--sb-muted)!important;
-      }
-
-      /* Slider cutoff fix */
-      section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{ padding-right:12px; }
-      section[data-testid="stSidebar"] div[data-testid="stSlider"]{
-        padding-right:12px; margin-right:2px; overflow:visible;
-      }
-      section[data-testid="stSidebar"] div[role="slider"]{
-        box-shadow:0 0 0 2px rgba(20,184,166,0.25); border-radius:999px;
-      }
-
-      /* Radio */
-      input[type="radio"]{ accent-color: var(--accent); }
-      div[role="radiogroup"] label{
-        display:flex; align-items:center; gap:.5rem;
-        line-height:1.2; margin: .1rem 0;
-      }
-      div[role="radiogroup"] input[type="radio"]{
-        transform: translateY(0px);
-      }
-
-      /* Buttons */
-      section[data-testid="stSidebar"] .stButton>button,
-      [data-testid="stAppViewContainer"] .stButton>button{
-        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important;
-        color:#0f172a !important;
-        border:0!important; font-weight:800!important; letter-spacing:.2px;
-        border-radius:10px; padding:.55rem 1rem;
-      }
-      section[data-testid="stSidebar"] .stButton>button:hover,
-      [data-testid="stAppViewContainer"] .stButton>button:hover{
-        filter:brightness(1.05);
-      }
-
-      /* 이미지 여백 */
-      [data-testid="stImage"]{ margin:6px 0 18px!important; }
-      [data-testid="stImage"] img{ display:block; }
-
-      span[label="app main"] {
-        font-size: 0 !important; position: relative;
-      }
-      span[label="app main"]::after {
-        content: "메인"; font-size: 1rem !important; color: #fff !important;
-        font-weight: 700 !important; position: absolute; left: 0; top: 0;
-      }
-
-      /* NumberInput stepper */
-      button[data-testid="stNumberInputStepUp"] svg,
-      button[data-testid="stNumberInputStepDown"] svg {
-          color: var(--sb-muted) !important; fill: var(--sb-muted) !important;
-      }
-      button[data-testid="stNumberInputStepUp"]:hover svg,
-      button[data-testid="stNumberInputStepDown"]:hover svg {
-          color: var(--sb-muted) !important; fill: var(--sb-muted) !important;
-      }
-
-      /* Selectbox */
-      div[data-baseweb="select"] div[role="combobox"],
-      div[data-baseweb="select"] div[role="combobox"] input,
-      div[data-baseweb="select"] div[value] {
-          color: var(--sb-muted) !important; font-weight: 600 !important;
-      }
-      div[data-baseweb="select"] svg { color: var(--sb-muted) !important; fill: var(--sb-muted) !important; }
-      div[data-baseweb="select"]:hover div[value],
-      div[data-baseweb="select"]:hover svg {
-          color: var(--sb-muted) !important; fill: var(--sb-muted) !important;
-      }
-
-      /* FileUploader */
-      section[data-testid="stFileUploaderDropzone"] {
-          border: 2px dashed var(--sb-line) !important;
-          background: rgba(255,255,255,0.03) !important;
-          color: var(--sb-muted) !important;
-          border-radius: 10px !important;
-          padding: 12px !important;
-      }
-      section[data-testid="stFileUploaderDropzone"] svg {
-          color: var(--sb-muted) !important; fill: var(--sb-muted) !important;
-      }
-      section[data-testid="stFileUploaderDropzone"] span {
-          color: var(--sb-muted) !important; font-weight: 600 !important;
-      }
-      section[data-testid="stFileUploaderDropzone"] button {
-          background: linear-gradient(180deg,var(--accent),var(--accent-2)) !important;
-          color: #001018 !important; border: 0 !important;
-          font-weight: 700 !important; border-radius: 8px !important;
-          padding: .4rem .9rem !important;
-      }
-      section[data-testid="stFileUploaderDropzone"] button:hover { filter: brightness(1.05); }
-
-      /* 기본 버튼 텍스트 색 */
-      button[data-testid="stBaseButton-primary"] p {
-          color: var(--ink) !important; font-weight: 700 !important;
-      }
-
-      /* stImage 컨테이너: 강제 100% 제거 → 확대 뭉개짐 방지 */
-      div[data-testid="stImage"] {
-          display: block !important;
-          max-width: 100% !important;   /* 부모보다 커지지 않게만 */
-          margin: 2rem auto !important;
-          text-align: center !important;
-          position: relative !important;
-      }
-      div[data-testid="stImage"] img {
-          width: auto !important; height: auto !important; /* 원본 크기 유지 */
-      }
-
-      /* 이미지와 캡션 간격 */
-      div[data-testid="stImageCaption"] { margin-top: 1rem !important; }
-
-      /* 사이드바 Alert 전용 스타일 */
-      section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] {
-          background: transparent !important; border: 1px solid #555 !important;
-          color: #e2e2e2 !important; border-radius: 6px !important; padding: 0.6rem !important;
-      }
-      section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] * {
-          color: inherit !important; fill: inherit !important;
-      }
-      section[data-testid="stSidebar"] div[data-testid="stAlertContainer"] svg {
-          color: #bbb !important; fill: #bbb !important;
-      }
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
-
-
-# --- end design refresh ---
-_design_refresh()
 
 # ---------------------------
 # UI: Sidebar (왼쪽 입력 인터페이스)
@@ -954,40 +780,3 @@ if do_calc:
 
         st.markdown("---")
         b1, b2 = st.columns([1, 1])
-
-
-
-
-# ─────────────────────────────────────────
-# (항상 표시) 저장된 바닥 결과 JSON 내보내기 / 다운로드
-# ─────────────────────────────────────────
-st.markdown("---")
-st.subheader("바닥 결과 내보내기")
-
-def _export_json():
-    data = st.session_state.get(FLOOR_RESULT_KEY)
-    if not data:
-        st.warning("먼저 '✅ 완료 저장'을 눌러 결과를 저장하세요.")
-        return
-    fname = f"floor_{pd.Timestamp.now():%Y%m%d_%H%M%S}.json"
-    path = os.path.join(EXPORT_DIR, fname)
-    save_json(path, data)
-    st.success(f"JSON 내보냈습니다: {path}")
-
-col_e1, col_e2 = st.columns(2)
-with col_e1:
-    st.button("💾 JSON 내보내기 (파일로 저장)", on_click=_export_json, key="btn_export_floor")
-
-with col_e2:
-    data = st.session_state.get(FLOOR_RESULT_KEY)
-    st.download_button(
-        "⬇️ JSON 다운로드 (브라우저)",
-        data=(
-            json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-            if data else b"{}"
-        ),
-        file_name="floor.json",
-        mime="application/json",
-        disabled=not bool(data),
-        key="btn_download_floor",
-    )

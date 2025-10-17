@@ -1,6 +1,6 @@
 # streamlit run app.py
 import io
-import os, glob,json
+import os, glob, json
 from typing import Optional, Dict, Any
 
 # --- Common Styles ---
@@ -8,11 +8,13 @@ from common_styles import apply_common_styles, set_page_config
 
 # --- Streamlit ---
 import streamlit as st
+
 set_page_config(page_title="바닥판 규격/옵션 산출", layout="wide")
 apply_common_styles()
 
 # --- Authentication ---
 import auth
+
 auth.require_auth()
 
 # --- Pillow / Image ---
@@ -27,28 +29,39 @@ FLOOR_DONE_KEY = "floor_done"
 FLOOR_RESULT_KEY = "floor_result"
 
 # ===== 경로 =====
-EXPORT_DIR = "exports"             # 섹션 JSON 저장 폴더
+EXPORT_DIR = "exports"  # 섹션 JSON 저장 폴더
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
+
 # ===== 유틸 =====
-def _get_font(size:int=16)->ImageFont.ImageFont:
-    try: return ImageFont.truetype("NotoSansKR-Regular.ttf", size)
-    except: return ImageFont.load_default()
+def _get_font(size: int = 16) -> ImageFont.ImageFont:
+    try:
+        return ImageFont.truetype("NotoSansKR-Regular.ttf", size)
+    except:
+        return ImageFont.load_default()
+
 
 def _map_floor_material_label(result_kind: str) -> str:
     rk = (result_kind or "").upper()
-    if "PVE" in rk: return "PP/PE 바닥판"
-    if "FRP" in rk: return "SMC/FRP바닥판"
+    if "PVE" in rk:
+        return "PP/PE 바닥판"
+    if "FRP" in rk:
+        return "SMC/FRP바닥판"
     return "GRP바닥판"
 
+
 def _extract_prices_from_row(row) -> Dict[str, int]:
-    prices = {"단가1":0,"노무비":0,"단가2":0}
-    if row is None: return prices
+    prices = {"단가1": 0, "노무비": 0, "단가2": 0}
+    if row is None:
+        return prices
     for k in prices.keys():
         if k in row and pd.notna(row[k]):
-            try: prices[k]=int(row[k])
-            except: pass
+            try:
+                prices[k] = int(row[k])
+            except:
+                pass
     return prices
+
 
 def _pve_prices_from_quote(q: Dict[str, Any]) -> Dict[str, int]:
     return {
@@ -57,7 +70,8 @@ def _pve_prices_from_quote(q: Dict[str, Any]) -> Dict[str, int]:
         "단가2": int(q.get("소계", 0)),
     }
 
-def save_json(path:str, data:Dict[str,Any]):
+
+def save_json(path: str, data: Dict[str, Any]):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -68,6 +82,7 @@ def save_json(path:str, data:Dict[str,Any]):
 
 
 # _init_state()
+
 
 # --- Pillow font loader (CJK 안전) ---
 def _get_font(size: int = 16) -> ImageFont.ImageFont:
@@ -105,6 +120,7 @@ def _get_font(size: int = 16) -> ImageFont.ImageFont:
 
     # 3) 최후: 기본 비트맵 폰트(한글은 각질 수 있음)
     return ImageFont.load_default()
+
 
 # ---------------------------
 # UI: Sidebar (왼쪽 입력 인터페이스)
@@ -457,11 +473,10 @@ def draw_bathroom(
     W, H = BASE_W * SCALE, BASE_H * SCALE
 
     # ✅ 방향별 패딩: 위/왼쪽을 크게 잡아 라벨 공간 확보
-    PAD_L = 48 * SCALE     # 왼쪽 (라벨 "욕실폭"이 바깥으로 나갈 공간)
+    PAD_L = 48 * SCALE  # 왼쪽 (라벨 "욕실폭"이 바깥으로 나갈 공간)
     PAD_R = 16 * SCALE
-    PAD_T = 48 * SCALE     # 위쪽 (라벨 "욕실길이"가 바깥으로 나갈 공간)
+    PAD_T = 48 * SCALE  # 위쪽 (라벨 "욕실길이"가 바깥으로 나갈 공간)
     PAD_B = 16 * SCALE
-
 
     BORDER, GAP = 6 * SCALE, 4 * SCALE
 
@@ -493,7 +508,7 @@ def draw_bathroom(
     shw = 0 if shw_mm is None else int(shw_mm)
     shl = 0 if shl_mm is None else int(shl_mm)
 
-   # ✅ 방향별 패딩을 반영한 가용 너비/높이
+    # ✅ 방향별 패딩을 반영한 가용 너비/높이
     avail_w = W - (PAD_L + PAD_R)
     avail_h = H - (PAD_T + PAD_B)
 
@@ -521,8 +536,10 @@ def draw_bathroom(
         w2, h2 = (bx2[2] - bx2[0], bx2[3] - bx2[1])
     except Exception:
         # getbbox 미지원일 경우 대략값
-        w1 = 80 * SCALE; h1 = 20 * SCALE
-        w2 = 60 * SCALE; h2 = 20 * SCALE
+        w1 = 80 * SCALE
+        h1 = 20 * SCALE
+        w2 = 60 * SCALE
+        h2 = 20 * SCALE
 
     # 위쪽 중앙 바깥(아래로 붙이는 'mb' 기준): y가 너무 작아지지 않게 클램프
     top_x = (x0 + x1) / 2
@@ -531,7 +548,9 @@ def draw_bathroom(
         drw.text((top_x, top_y), "욕실길이", fill="black", anchor="mb", font=font_small)
     except Exception:
         # anchor 미지원일 때 대략 중앙 정렬
-        drw.text((top_x - w1/2, top_y - h1), "욕실길이", fill="black", font=font_small)
+        drw.text(
+            (top_x - w1 / 2, top_y - h1), "욕실길이", fill="black", font=font_small
+        )
 
     # 왼쪽 중앙 바깥(오른쪽으로 붙이는 'rm' 기준): x가 너무 작아지지 않게 클램프
     left_x = max(4 * SCALE + w2, x0 - 8 * SCALE)
@@ -539,8 +558,9 @@ def draw_bathroom(
     try:
         drw.text((left_x, left_y), "욕실폭", fill="black", anchor="rm", font=font_small)
     except Exception:
-        drw.text((left_x - w2, left_y - h2/2), "욕실폭", fill="black", font=font_small)
-
+        drw.text(
+            (left_x - w2, left_y - h2 / 2), "욕실폭", fill="black", font=font_small
+        )
 
     # 치수 라벨(간단)
     # try:
@@ -566,7 +586,9 @@ def draw_bathroom(
             sx1 = min(x1 - BORDER, sx0 + sink_w)
             sy0 = max(y0 + BORDER, sy1 - sink_h)
             if safe_rect(sx0, sy0, sx1, sy1, "blue", 3 * SCALE):
-                text_center((sx0 + sx1) / 2, (sy0 + sy1) / 2, "세면부", "blue", font=font_label)
+                text_center(
+                    (sx0 + sx1) / 2, (sy0 + sy1) / 2, "세면부", "blue", font=font_label
+                )
 
         # 샤워부(우하)
         if shw > 0 and shl > 0:
@@ -580,7 +602,9 @@ def draw_bathroom(
             if "sx1" in locals() and tx0 < (sx1 + GAP):
                 tx0 = min(tx1 - 1, sx1 + GAP)
             if safe_rect(tx0, ty0, tx1, ty1, "red", 3 * SCALE):
-                text_center((tx0 + tx1) / 2, (ty0 + ty1) / 2, "샤워부", "red", font=font_label)
+                text_center(
+                    (tx0 + tx1) / 2, (ty0 + ty1) / 2, "샤워부", "red", font=font_label
+                )
 
         return img
 
@@ -595,7 +619,13 @@ def draw_bathroom(
     left_x1 = max(left_x0 + 1, boundary_x - GAP)
     if left_x1 > left_x0:
         if safe_rect(left_x0, y0 + BORDER, left_x1, y1 - BORDER, "blue", 3 * SCALE):
-            text_center((left_x0 + left_x1) / 2, (y0 + y1) / 2, "세면부", "blue", font=font_label)
+            text_center(
+                (left_x0 + left_x1) / 2,
+                (y0 + y1) / 2,
+                "세면부",
+                "blue",
+                font=font_label,
+            )
 
     # 경계선(전고)
     ImageDraw.Draw(img).line(
@@ -614,7 +644,9 @@ def draw_bathroom(
         rx0 = max(boundary_x + BORDER, rx1 - min(rot_w, usable_w))
         ry0 = max(y0 + BORDER, ry1 - rot_h)
         if safe_rect(rx0, ry0, rx1, ry1, "red", 3 * SCALE):
-            text_center((rx0 + rx1) / 2, (ry0 + ry1) / 2, "샤워부", "red", font=font_label)
+            text_center(
+                (rx0 + rx1) / 2, (ry0 + ry1) / 2, "샤워부", "red", font=font_label
+            )
 
     return img
 
@@ -644,9 +676,16 @@ if do_calc:
 
     if exception_applied:
         decision_log.append("샤워부 1000×900 → 예외규칙 적용으로 900×1000 간주")
-    elif ((not disable_sink_shower) and (shw is not None) and (shl is not None)
-          and shw == 1000 and shl == 900):
-        decision_log.append("샤워부 1000×900 감지됨(예외 규격) → 사이드바에서 적용 여부 선택 가능")
+    elif (
+        (not disable_sink_shower)
+        and (shw is not None)
+        and (shl is not None)
+        and shw == 1000
+        and shl == 900
+    ):
+        decision_log.append(
+            "샤워부 1000×900 감지됨(예외 규격) → 사이드바에서 적용 여부 선택 가능"
+        )
 
     # 이 변수들 반드시 모든 분기에서 채워지게 기본값 준비
     result_kind = None
@@ -687,7 +726,9 @@ if do_calc:
         else:
             if shape == "사각형":
                 decision_log.append("중앙배수=No & 형태=사각형")
-                matched = match_non_center_rectangle(df, btype, bw, bl, sw, sl, shw_eff, shl_eff)
+                matched = match_non_center_rectangle(
+                    df, btype, bw, bl, sw, sl, shw_eff, shl_eff
+                )
                 if matched is None:
                     decision_log.append("사각형 매칭 실패 → PVE 계산")
                     q = pve_quote(bw, bl, mgmt_rate, pve_kind)
@@ -704,7 +745,9 @@ if do_calc:
                         result_kind += " (단차없음)"
                     decision_log.append(f"{result_kind} 매칭 성공 → 최소 소계 선택")
             else:
-                decision_log.append("중앙배수=No & 형태=코너형 & 유형=샤워형 → GRP→FRP 순서")
+                decision_log.append(
+                    "중앙배수=No & 형태=코너형 & 유형=샤워형 → GRP→FRP 순서"
+                )
                 matched = match_corner_shower(df, bw, bl, sw, sl, shw_eff, shl_eff)
                 if matched is None:
                     decision_log.append("코너형/샤워형 매칭 실패 → PVE 계산")
@@ -729,31 +772,34 @@ if do_calc:
     floor_spec = f"{int(bw)}×{int(bl)}"  # 필요시 행(row)에서 규격 필드가 있으면 치환
 
     floor_result_payload = {
-    "section": "floor",
-    "material": material_label,
-    "spec": floor_spec,
-    "prices": {
-        "단가1": int(prices.get("단가1", 0)),
-        "노무비": int(prices.get("노무비", 0)),
-        "단가2": int(prices.get("단가2", 0)),
-    },
-    "qty": 1,
-    "meta": {
-        "result_kind": result_kind,
-        "subtotal": int(base_subtotal),
-        "subtotal_with_mgmt": int(mgmt_total),
-        "inputs": {
-            "central": central, "shape": shape, "btype": btype,
-            "bw": int(bw), "bl": int(bl),
-            "sw": (None if sw is None else int(sw)),
-            "sl": (None if sl is None else int(sl)),
-            "shw": (None if shw_eff is None else int(shw_eff)),
-            "shl": (None if shl_eff is None else int(shl_eff)),
-            "mgmt_rate_pct": float(mgmt_rate_pct),
-            "pve_kind": pve_kind,
-            "units": int(units),
+        "section": "floor",
+        "material": material_label,
+        "spec": floor_spec,
+        "prices": {
+            "단가1": int(prices.get("단가1", 0)),
+            "노무비": int(prices.get("노무비", 0)),
+            "단가2": int(prices.get("단가2", 0)),
         },
-    },
+        "qty": 1,
+        "meta": {
+            "result_kind": result_kind,
+            "subtotal": int(base_subtotal),
+            "subtotal_with_mgmt": int(mgmt_total),
+            "inputs": {
+                "central": central,
+                "shape": shape,
+                "btype": btype,
+                "bw": int(bw),
+                "bl": int(bl),
+                "sw": (None if sw is None else int(sw)),
+                "sl": (None if sl is None else int(sl)),
+                "shw": (None if shw_eff is None else int(shw_eff)),
+                "shl": (None if shl_eff is None else int(shl_eff)),
+                "mgmt_rate_pct": float(mgmt_rate_pct),
+                "pve_kind": pve_kind,
+                "units": int(units),
+            },
+        },
     }
 
     # 세션 상태에 자동 저장
@@ -798,7 +844,7 @@ if do_calc:
     # 벽판 계산 페이지로 이동 버튼
     col_spacer, col_btn, col_spacer2 = st.columns([1, 2, 1])
     with col_btn:
-        st.page_link("pages/벽판_계산.py", label="🟩 벽판 계산 시작하기", icon=None)
+        st.page_link("pages/2_벽판_계산.py", label="🟩 벽판 계산 시작하기", icon=None)
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
@@ -813,9 +859,13 @@ if do_calc:
         st.subheader("선택된 바닥판")
         st.write(f"**재질**: {material_label}")
         st.write(f"**규격**: {floor_spec}")
-        st.write(f"**단가1/노무비/단가2**: {prices['단가1']:,} / {prices['노무비']:,} / {prices['단가2']:,}")
+        st.write(
+            f"**단가1/노무비/단가2**: {prices['단가1']:,} / {prices['노무비']:,} / {prices['단가2']:,}"
+        )
         st.write(f"**소계(원)**: {base_subtotal:,}")
-        st.write(f"**관리비 포함 소계(원)**: {mgmt_total:,}  (관리비율 {mgmt_rate_pct:.1f}%)")
+        st.write(
+            f"**관리비 포함 소계(원)**: {mgmt_total:,}  (관리비율 {mgmt_rate_pct:.1f}%)"
+        )
 
         st.info("결정 과정", icon="ℹ️")
         st.write("\n".join([f"- {x}" for x in decision_log]))

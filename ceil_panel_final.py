@@ -11,6 +11,9 @@ from datetime import datetime
 # --- Common Styles ---
 from common_styles import apply_common_styles, set_page_config
 
+# --- Authentication ---
+import auth
+
 # --- Streamlit ---
 import streamlit as st
 import streamlit.components.v1 as components
@@ -19,6 +22,8 @@ import pandas as pd
 
 set_page_config(page_title="천장판 최적 조합", layout="wide")
 apply_common_styles()
+
+auth.require_auth()
 
 EXPORT_DIR = "exports"
 os.makedirs(EXPORT_DIR, exist_ok=True)
@@ -920,6 +925,7 @@ if mode == "사각형":
                 "summary": res.get("summary", {}),
             },
         }
+        st.session_state[CEIL_DONE_KEY] = True
         st.success("천장 결과 자동저장 완료")
     except Exception as _e:
         st.warning(f"천장 결과 자동저장 중 오류: {_e}")
@@ -1010,6 +1016,7 @@ else:
                 "mgmt_total": res.get("mgmt_total"),
             },
         }
+        st.session_state[CEIL_DONE_KEY] = True
         st.success("천장 결과 자동저장 완료")
     except Exception as _e:
         st.warning(f"천장 결과 자동저장 중 오류: {_e}")

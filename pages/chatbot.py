@@ -1,4 +1,5 @@
 from common_styles import apply_common_styles, set_page_config
+import auth
 
 import os
 import tempfile
@@ -13,6 +14,7 @@ from typing import List, Tuple
 
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
+
 
 # === [ADD] 여러 형태의 섹션 헤더 줄바꿈 보정 ===
 HEADER_MARKERS = ("※", "■", "◆", "●", "▶", "▷", "▲", "▸", "•")
@@ -134,6 +136,8 @@ assert OPENAI_API_KEY, "OPENAI_API_KEY가 .env에 없습니다."
 
 set_page_config(page_title="시방서 Q&A 챗봇", page_icon="🛁", layout="wide")
 apply_common_styles()
+
+auth.require_auth()
 
 st.title("🛁 시방서 Q&A 챗봇")
 

@@ -2,6 +2,7 @@
 # session_state 연동 버전 - 바닥/벽/천장 계산 결과를 자동으로 가져옵니다.
 
 from common_styles import apply_common_styles, set_page_config
+import auth
 
 import json
 import io
@@ -17,6 +18,8 @@ CEIL_RESULT_KEY = "ceil_result"
 
 set_page_config(page_title="욕실 견적서 생성기", layout="wide")
 apply_common_styles()
+
+auth.require_auth()
 
 # ----------------------------
 # Helper Functions
@@ -190,10 +193,63 @@ with col4:
         units_display = int(inputs.get("units", 1))
     st.metric("공사 세대수", f"{units_display}세대")
 
-if not (has_floor and has_wall and has_ceil):
-    st.warning("⚠️ 바닥판, 벽판, 천장판 계산을 모두 완료한 후 견적서를 생성할 수 있습니다.")
-    st.info("왼쪽 사이드바에서 각 계산 페이지로 이동하여 계산을 완료하세요.")
-    st.stop()
+# ========== 바닥판, 벽판, 천장판 계산 의존성 체크 ==========
+missing_steps = []
+if not has_floor:
+    missing_steps.append("🟦 바닥판 계산")
+if not has_wall:
+    missing_steps.append("🟩 벽판 계산")
+if not has_ceil:
+    missing_steps.append("🟨 천장판 계산")
+
+if missing_steps:
+    st.warning(f"⚠️ 견적서를 생성하려면 먼저 **{', '.join(missing_steps)}**을(를) 완료해야 합니다.")
+
+    # 안내 카드
+    st.markdown(
+        """
+    <div style="
+        border: 1px solid #f59e0b;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 16px 0;
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    ">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+            <span style="font-size: 24px;">📋</span>
+            <h3 style="margin: 0; color: #0f172a; font-weight: 700;">계산 순서 안내</h3>
+        </div>
+        <p style="margin: 0 0 12px 36px; color: #78350f; line-height: 1.6;">
+            견적서 생성은 모든 계산이 완료된 후 진행할 수 있습니다:
+        </p>
+        <div style="margin-left: 36px; padding: 12px; background: white; border-radius: 8px; border: 1px solid #f59e0b;">
+            <p style="margin: 0; color: #92400e; font-size: 0.95rem; line-height: 1.6;">
+                <strong>1단계:</strong> 🟦 바닥판 계산""" + (" ← <em style='color:#dc2626;'>미완료</em>" if not has_floor else " ✅") + """<br>
+                <strong>2단계:</strong> 🟩 벽판 계산""" + (" ← <em style='color:#dc2626;'>미완료</em>" if not has_wall else " ✅") + """<br>
+                <strong>3단계:</strong> 🟨 천장판 계산""" + (" ← <em style='color:#dc2626;'>미완료</em>" if not has_ceil else " ✅") + """<br>
+                <strong>4단계:</strong> 📋 견적서 생성 ← <em>현재 페이지</em>
+            </p>
+        </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # 미완료 단계로 이동하는 버튼
+    col_spacer, col_btn, col_spacer2 = st.columns([1, 2, 1])
+    with col_btn:
+        if not has_floor:
+            st.page_link("pages/바닥판_계산.py", label="🟦 바닥판 계산 시작하기", icon=None)
+        elif not has_wall:
+            st.page_link("pages/벽판_계산.py", label="🟩 벽판 계산 시작하기", icon=None)
+        elif not has_ceil:
+            st.page_link("pages/천장판_계산.py", label="🟨 천장판 계산 시작하기", icon=None)
+
+    st.stop()  # 이전 단계 미완료 시 이후 UI 차단
+
+# 모든 단계 완료 시 성공 메시지
+st.success("✅ 모든 계산이 완료되었습니다. 견적서를 생성할 수 있습니다.")
 
 # Convert session_state data
 floor_data = convert_floor_data(floor_result)

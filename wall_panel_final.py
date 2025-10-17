@@ -13,6 +13,10 @@ import streamlit as st
 set_page_config(page_title="벽판 계산기", layout="wide")
 apply_common_styles()
 
+# --- Authentication ---
+import auth
+auth.require_auth()
+
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 import os, json
@@ -819,6 +823,54 @@ def panels_for_faces_new_engine(faces: List[FaceSpec], TH: int, TW: int):
 # =========================================================
 st.title("벽판 규격/개수 산출 (통합 · New Layout Engine)")
 
+# ========== 바닥판 계산 의존성 체크 ==========
+floor_done = st.session_state.get(FLOOR_DONE_KEY, False)
+floor_result = st.session_state.get(FLOOR_RESULT_KEY)
+
+if not floor_done or not floor_result:
+    st.warning("⚠️ 벽판 계산을 진행하려면 먼저 **바닥판 계산**을 완료해야 합니다.")
+
+    # 안내 카드
+    st.markdown(
+        """
+    <div style="
+        border: 1px solid #f59e0b;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 16px 0;
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    ">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+            <span style="font-size: 24px;">📋</span>
+            <h3 style="margin: 0; color: #0f172a; font-weight: 700;">계산 순서 안내</h3>
+        </div>
+        <p style="margin: 0 0 12px 36px; color: #78350f; line-height: 1.6;">
+            성일 시스템은 순차적인 계산 흐름을 따릅니다:
+        </p>
+        <div style="margin-left: 36px; padding: 12px; background: white; border-radius: 8px; border: 1px solid #f59e0b;">
+            <p style="margin: 0; color: #92400e; font-size: 0.95rem; line-height: 1.6;">
+                <strong>1단계:</strong> 🟦 바닥판 계산<br>
+                <strong>2단계:</strong> 🟩 벽판 계산 ← <em>현재 페이지</em><br>
+                <strong>3단계:</strong> 🟨 천장판 계산<br>
+                <strong>4단계:</strong> 📋 견적서 생성
+            </p>
+        </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # 바닥판 계산 페이지로 이동 버튼
+    col_spacer, col_btn, col_spacer2 = st.columns([1, 2, 1])
+    with col_btn:
+        st.page_link("pages/바닥판_계산.py", label="🟦 바닥판 계산 시작하기", icon=None)
+
+    st.stop()  # 바닥판 미완료 시 이후 UI 차단
+
+# 바닥판 완료 시 성공 메시지
+st.success("✅ 바닥판 계산이 완료되었습니다. 벽판 계산을 진행할 수 있습니다.")
+
 with st.sidebar:
     st.header("기본 입력")
     shape = st.radio("욕실형태", ["사각형", "코너형"], horizontal=True)
@@ -1006,7 +1058,7 @@ if shape == "사각형":
             try:
                 # rows, errs가 이미 계산되어 있다고 가정
                 # 필수 입력 요약도 같이 저장합니다.
-                st.session_state["wall_result"] = {
+                st.session_state[WALL_RESULT_KEY] = {
                     "section": "wall",
                     "inputs": {
                         "shape": shape,
@@ -1035,6 +1087,7 @@ if shape == "사각형":
                         },
                     }
                 }
+                st.session_state[WALL_DONE_KEY] = True
                 st.success("벽판 결과 자동저장 완료")
             except Exception as _e:
                 st.warning(f"벽판 결과 자동저장 중 오류: {_e}")
@@ -1154,7 +1207,7 @@ else:
             try:
                 # rows, errs가 이미 계산되어 있다고 가정
                 # 필수 입력 요약도 같이 저장합니다.
-                st.session_state["wall_result"] = {
+                st.session_state[WALL_RESULT_KEY] = {
                     "section": "wall",
                     "inputs": {
                         "shape": shape,
@@ -1183,6 +1236,7 @@ else:
                         },
                     }
                 }
+                st.session_state[WALL_DONE_KEY] = True
                 st.success("벽판 결과 자동저장 완료")
             except Exception as _e:
                 st.warning(f"벽판 결과 자동저장 중 오류: {_e}")

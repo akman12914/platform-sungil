@@ -11,6 +11,10 @@ import streamlit as st
 set_page_config(page_title="바닥판 규격/옵션 산출", layout="wide")
 apply_common_styles()
 
+# --- Authentication ---
+import auth
+auth.require_auth()
+
 # --- Pillow / Image ---
 from PIL import Image, ImageDraw, ImageFont
 
@@ -760,6 +764,44 @@ if do_calc:
     # ---------------------------
     # 출력(UI) — 단 한 번만!
     # ---------------------------
+    # 성공 메시지 및 다음 단계 안내
+    st.success("✅ 바닥판 계산이 완료되었습니다!")
+
+    # 다음 단계 안내 카드
+    st.markdown(
+        """
+    <div style="
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 16px 0;
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    ">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+            <span style="font-size: 24px;">🔄</span>
+            <h3 style="margin: 0; color: #0f172a; font-weight: 700;">다음 단계</h3>
+        </div>
+        <p style="margin: 0 0 12px 36px; color: #475569; line-height: 1.6;">
+            바닥판 계산이 완료되었습니다. 이제 <strong>벽판 계산</strong>으로 진행해주세요.
+        </p>
+        <div style="margin-left: 36px; padding: 12px; background: white; border-radius: 8px; border: 1px solid #cbd5e1;">
+            <p style="margin: 0; color: #64748b; font-size: 0.9rem; line-height: 1.5;">
+                📍 <strong>권장 순서:</strong> 바닥판 ✅ → 벽판 → 천장판 → 견적서 생성
+            </p>
+        </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # 벽판 계산 페이지로 이동 버튼
+    col_spacer, col_btn, col_spacer2 = st.columns([1, 2, 1])
+    with col_btn:
+        st.page_link("pages/벽판_계산.py", label="🟩 벽판 계산 시작하기", icon=None)
+
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+
     left, right = st.columns([1, 2], vertical_alignment="top")
 
     with left:

@@ -1,0 +1,63 @@
+[[pages]]
+path = "메인.py"
+name = "메인"
+icon = "🏠"
+default = true
+in_nav = true
+
+[[pages]]
+name = "계산 도구"
+is_section = true
+in_nav = true
+
+[[pages]]
+path = "pages/바닥판_계산.py"
+name = "바닥판 계산"
+icon = "🟦"
+in_nav = true
+order = 1
+
+[[pages]]
+path = "pages/벽판_계산.py"
+name = "벽판 계산"
+icon = "🟥"
+in_nav = true
+order = 2
+
+[[pages]]
+path = "pages/천장판_계산.py"
+name = "천장판 계산"
+icon = "🟩"
+in_nav = true
+order = 3
+
+[[pages]]
+name = "지원 도구"
+is_section = true
+in_nav = true
+
+[[pages]]
+path = "pages/견적서_생성.py"
+name = "견적서 생성"
+icon = "🧾"
+in_nav = true
+order = 4
+
+[[pages]]
+path = "pages/chatbot.py"
+name = "챗봇"
+icon = "💬"
+in_nav = true
+order = 5
+
+[[pages]]
+path = "pages/관리자.py"
+name = "관리자"
+icon = "⚙️"
+is_hidden = true
+
+[[pages]]
+path = "pages/로그인.py"
+name = "로그인"
+icon = "🔐"
+is_hidden = true

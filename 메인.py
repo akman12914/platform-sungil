@@ -1,4 +1,5 @@
 import streamlit as st
+from st_pages import Page, add_page_title, hide_pages
 import auth
 
 
@@ -8,7 +9,10 @@ try:
 except Exception:
     pass
 
+
+hide_pages(["관리자", "로그인"])
 # 로그인 체크
+
 auth.require_auth()
 
 
@@ -153,8 +157,10 @@ def _sidebar_dark_and_slider_fix():
       left: 0;
       top: 0;
   }
-
-
+  section[data-testid="stSidebarNav"] a[aria-label*="관리자"],
+  section[data-testid="stSidebarNav"] a[aria-label*="로그인"] {
+      display: none !important;
+  }
 
     </style>
     """,
@@ -173,7 +179,7 @@ with st.sidebar:
 
     if user_info:
         st.markdown(f"**👤 {user_info['name']}**")
-        role_text = "관리자" if user_info['role'] == "admin" else "사용자"
+        role_text = "관리자" if user_info["role"] == "admin" else "사용자"
         st.caption(f"{role_text} • {user_info['username']}")
 
         if st.button("🚪 로그아웃", use_container_width=True):
@@ -200,21 +206,21 @@ c1, c2, c3 = st.columns(3, gap="medium")
 
 with c1:
     st.page_link(
-        "pages/바닥판_계산.py",
+        "pages/1_바닥판_계산.py",
         label="🟦 바닥판 계산기\n바닥 규격 산출 및 미리보기",
         icon=None,
     )
 
 with c2:
     st.page_link(
-        "pages/벽판_계산.py",
+        "pages/2_벽판_계산.py",
         label="🟩 벽판 계산기\n문/젠다이/분할 규칙 반영",
         icon=None,
     )
 
 with c3:
     st.page_link(
-        "pages/천장판_계산.py",
+        "pages/3_천장판_계산.py",
         label="🟨 천장판 최적화\n패턴 전수/최소비용 조합",
         icon=None,
     )
@@ -230,14 +236,14 @@ sp_l, c4, c5, sp_r = st.columns([1, 3, 3, 1], gap="medium")
 
 with c4:
     st.page_link(
-        "pages/견적서_생성.py",
+        "pages/4_견적서_생성.py",
         label="📋 견적서 생성\n바닥/벽/천장 결과 종합",
         icon=None,
     )
 
 with c5:
     st.page_link(
-        "pages/chatbot.py",
+        "pages/5_chatbot.py",
         label="💬 시방서 Q&A\nAI 챗봇 (PDF 검색)",
         icon=None,
     )

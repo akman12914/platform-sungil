@@ -986,6 +986,29 @@ def jendai_overlays_for_wall(
     return [(0, depth, 0, jh)]
 
 
+# ### NEW: JENDAI SIDE UTIL
+def compute_jendai_side_panels(shape: str, j_enabled: bool, j_has_step: bool,
+                               j_depth: int, j_h: int):
+    """단차가 있는 젠다이의 '옆벽판' 자동 생성.
+       - 사각형: 2장, 코너형: 1장
+       - 치수: (폭=젠다이 깊이, 높이=젠다이 높이)
+    """
+    if not (j_enabled and j_has_step):
+        return []
+    cnt = 2 if shape == "사각형" else 1
+    return [{
+        "벽": "젠다이옆벽",
+        "벽면": f"JEND_SIDE_{i+1}",
+        "타일": "",           # 필요시 f"{TH}×{TW}"로 맞춤
+        "가로분해": "SIDE-PANEL",
+        "세로규칙": "SIDE-PANEL",
+        "열": 1, "행": 1,
+        "panel_w": int(j_depth), "panel_h": int(j_h),
+        "col_tags": "", "row_tags": "",
+        "face_w": int(j_depth), "face_h": int(j_h),
+    } for i in range(cnt)]
+
+
 def draw_wall_elevation_with_faces(
     wall_label_str: str,
     width_mm: int,
@@ -1400,15 +1423,26 @@ if shape == "사각형":
                     overlays=overlays,
                 )
                 with cols[i % 2]:
+                    is_jendai_wall = (j_enabled and j_has_step and (j_wall is not None) and (int(j_wall) == int(wid)))
+                    extra = 2 if is_jendai_wall else 0   # 사각형: +2
+
+                    caption = f"{wall_label('사각형', wid)} (벽면 {len(faces) + extra})개"
                     st.image(
                         img,
-                        caption=f"{wall_label('사각형', wid)} (벽면 {len(faces)}개)",
+                        caption=caption,
                         width="content",
                     )
 
             # 새 엔진으로 패널 산출
             st.subheader("벽면별 벽판 산출 (New Engine)")
             rows, errs = panels_for_faces_new_engine(all_faces, TH, TW)
+            # ### ADD: JENDAI SIDE ROWS (RECT)
+            if j_enabled and j_has_step and int(j_depth) > 0 and int(j_h) > 0:
+                side_rows = compute_jendai_side_panels("사각형", j_enabled, j_has_step, int(j_depth), int(j_h))
+                TH, TW = parse_tile(tile)  # 표 정렬을 위해 타일 컬럼 맞춤 (선택)
+                for r in side_rows:
+                    r["타일"] = f"{TH}×{TW}"
+                rows.extend(side_rows)
             if rows:
                 df = pd.DataFrame(rows).rename(
                     columns={
@@ -1609,15 +1643,27 @@ else:
                     overlays=overlays,
                 )
                 with cols[i % 3]:
+                    # ### FIX: JENDAI SIDE CAPTION (CORNER / dynamic Wn)
+                    is_jendai_wall = (j_enabled and j_has_step and (j_wall is not None) and (int(j_wall) == int(wid)))
+                    extra = 1 if is_jendai_wall else 0
+
+                    caption = f"{wall_label('코너형', wid)} (벽면 {len(faces) + extra})개"
                     st.image(
                         img,
-                        caption=f"{wall_label('코너형', wid)} (벽면 {len(faces)}개)",
+                        caption=caption,
                         width="content",
                     )
 
             # 새 엔진으로 패널 산출
             st.subheader("벽면별 벽판 산출 (New Engine)")
             rows, errs = panels_for_faces_new_engine(all_faces, TH, TW)
+            # ### ADD: JENDAI SIDE ROWS (CORNER)
+            if j_enabled and j_has_step and int(j_depth) > 0 and int(j_h) > 0:
+                side_rows = compute_jendai_side_panels("코너형", j_enabled, j_has_step, int(j_depth), int(j_h))
+                TH, TW = parse_tile(tile)
+                for r in side_rows:
+                    r["타일"] = f"{TH}×{TW}"
+                rows.extend(side_rows)
             if rows:
                 df = pd.DataFrame(rows).rename(
                     columns={

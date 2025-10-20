@@ -1,12 +1,21 @@
-# app_ceiling_full.py
 # -*- coding: utf-8 -*-
+# 통합: 천장판 계산 UI + 엔진 + 엑셀 카탈로그 로딩 + 도면/배치행렬 스케치 + 표 + JSON 내보내기
+# 역이식: 다운로드 파일 형식 + 인증시스템 + session state + common_styles
+# 실행: streamlit run ceil_panel_final2.py
+
 from __future__ import annotations
-import itertools
-import re, unicodedata, difflib
+import io
+import json
+import math
+import os
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any, Tuple
-import os, json
+from typing import List, Tuple, Optional, Literal, Dict
+from collections import Counter, defaultdict
 from datetime import datetime
+
+import streamlit as st
+import pandas as pd
+from PIL import Image, ImageDraw, ImageFont
 
 # --- Common Styles ---
 from common_styles import apply_common_styles, set_page_config
@@ -14,1009 +23,1061 @@ from common_styles import apply_common_styles, set_page_config
 # --- Authentication ---
 import auth
 
-# --- Streamlit ---
-import streamlit as st
-import streamlit.components.v1 as components
-import numpy as np
-import pandas as pd
-
-set_page_config(page_title="천장판 최적 조합", layout="wide")
+# =========================================
+# 페이지 설정 및 인증
+# =========================================
+set_page_config(page_title="천장판 계산 프로그램 (통합)", layout="wide")
 apply_common_styles()
-
 auth.require_auth()
 
+# =========================================
+# Session State Keys
+# =========================================
 EXPORT_DIR = "exports"
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
+CEIL_DONE_KEY = "ceil_done"
+CEIL_RESULT_KEY = "ceil_result"
+
+# =========================================
+# 전역 상수/옵션
+# =========================================
+CUT_COST = 3000
+STEP_MM = 50
+BODY_MAX_W = 1450
+SIDE_MAX_W = 1200
+
+
+# =========================================
+# 공통 유틸
+# =========================================
+def iround(x: float) -> int:
+    return int(math.floor(x + 0.5))
+
+
+def install_space_rect(W: int, L: int) -> Tuple[int, int]:
+    """사각형: 설치공간 보정 (좌우/상하 각 +50)"""
+    return int(W) + 100, int(L) + 100
+
+
+def install_spaces_corner(
+    v1: int, v2: int, v3: int, v4: int, v5: int, v6: int
+) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+    """코너형: ((세면 폭,길이), (샤워 폭,길이))"""
+    v1, v2, v3, v4, v5, v6 = map(int, (v1, v2, v3, v4, v5, v6))
+    sink_w = v2 + 100
+    sink_l = (v1 - v5) + 100  # = v3 + 100
+    shower_w = v6 + 100
+    shower_l = v5 + 50
+    return (sink_w, sink_l), (shower_w, shower_l)
+
+
 def _save_json(path: str, data: dict):
+    """JSON 파일 저장"""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def candidate_to_dict(c: 'Candidate') -> Dict[str, Any]:
-    return {
-        "pattern": list(c.pattern),
-        "oriented": [
-            {
-                "kind": o.panel.kind,
-                "name": o.panel.name,
-                "cw": o.cw,
-                "cl": o.cl,
-                "rotated": o.rotated,
-                "panel": {
-                    "name": o.panel.name,
-                    "kind": o.panel.kind,
-                    "width": o.panel.width,
-                    "length": o.panel.length,
-                    "price": o.panel.price,
-                },
-            }
-            for o in c.oriented
-        ],
-        "width_cuts": list(c.width_cuts),
-        "length_cut_last": int(c.length_cut_last),
-        "material_cost": int(c.material_cost),
-        "cut_cost": int(c.cut_cost),
-        "total_cost": int(c.total_cost),
-    }
 
-# =========================================================
-# 설정 / 상수
-# =========================================================
-CUT_COST_DEFAULT = 3000
-MGMT_RATIO_DEFAULT = 25.0
-DOUBLE_CHECK_NAMES = {"SI-7", "SI-8", "SI-9"}  # 점검구 ×2 자동 적용
-MAX_RECT_CANVAS_W = 540  # 화면 1/3 정도
-MAX_RECT_CANVAS_H = 360
-
-
-FLOOR_DONE_KEY = "floor_done"
-FLOOR_RESULT_KEY = "floor_result"
-
-WALL_DONE_KEY  = "wall_done"
-WALL_RESULT_KEY = "wall_result"
-
-CEIL_DONE_KEY  = "ceil_done"
-CEIL_RESULT_KEY = "ceil_result"
-
-
-
-# =========================================================
-# 데이터 모델
-# =========================================================
+# =========================================
+# 카탈로그 모델
+# =========================================
 @dataclass(frozen=True)
 class Panel:
-    kind: str  # "B" or "S"
     name: str
-    width: int  # mm
-    length: int  # mm
-    price: int  # 원
+    kind: Literal["BODY", "SIDE", "HATCH"]
+    w: int
+    l: int
+    price: int
 
 
-@dataclass
-class Oriented:
-    panel: Panel
-    cw: int  # 배치폭 (회전 반영)
-    cl: int  # 배치길이 (회전 반영)
-    rotated: bool
+# 기본 카탈로그(엑셀 업로드 없을 때 사용)
+DEFAULT_BODY: List[Panel] = [
+    Panel("SI-2", "BODY", 1300, 2000, 24877),
+    Panel("SI-3", "BODY", 1300, 1750, 19467),
+    Panel("SI-4", "BODY", 1350, 1750, 20465),
+    Panel("SI-5", "BODY", 1350, 1750, 22778),
+    Panel("SI-6", "BODY", 1450, 1750, 22091),
+    Panel("SI-7", "BODY", 1000, 1750, 22305),
+    Panel("SI-8", "BODY", 1200, 1750, 25854),
+    Panel("SI-9", "BODY", 1200, 2000, 31177),
+    Panel("SI-10", "BODY", 1370, 1850, 22091),
+    Panel("SI-11", "BODY", 1260, 1850, 21026),
+]
+DEFAULT_SIDE: List[Panel] = [
+    Panel("SIDE-700", "SIDE", 700, 1750, 14110),
+    Panel("SIDE-800", "SIDE", 800, 1750, 15954),
+    Panel("SIDE-900a", "SIDE", 900, 1750, 18684),
+    Panel("SIDE-900b", "SIDE", 900, 960, 10786),  # 회전 후보
+    Panel("SIDE-1000", "SIDE", 1000, 1750, 19905),
+    Panel("SIDE-1100", "SIDE", 1100, 1850, 20190),
+    Panel("SIDE-1200", "SIDE", 1200, 1750, 23454),
+    Panel("SIDE-2000x1200", "SIDE", 1200, 2000, 28777),
+    Panel("SIDE-750", "SIDE", 750, 1850, 14528),
+]
+DEFAULT_HATCH: List[Panel] = [
+    Panel("SI-2", "HATCH", 700, 900, 8586),
+    Panel("SI-3", "HATCH", 700, 900, 8586),
+    Panel("SI-4", "HATCH", 700, 900, 8586),
+    Panel("SI-5", "HATCH", 500, 650, 6297),
+    Panel("SI-6", "HATCH", 700, 900, 8586),
+    Panel("SI-7", "HATCH", 450, 450, 4728),
+    Panel("SI-8", "HATCH", 450, 450, 4728),
+    Panel("SI-9", "HATCH", 450, 450, 4728),
+    Panel("SI-10", "HATCH", 650, 900, 8175),
+    Panel("SI-11", "HATCH", 750, 900, 8185),
+]
 
 
-@dataclass
-class Candidate:
-    pattern: List[str]  # ex) ["B"], ["B","S"], ["B","S","S"], ...
-    oriented: List[Oriented]  # 패턴과 같은 길이
-    width_cuts: List[int]  # 각 판 폭컷(0/1)
-    length_cut_last: int  # 마지막 장 길이컷(0/1)
-    material_cost: int
-    cut_cost: int
-    total_cost: int
-
-
-# =========================================================
-# 유틸 - 숫자/문자 파싱 & 정규화
-# =========================================================
-def _to_int(x, default=0):
-    if pd.isna(x):
-        return default
-    s = str(x).replace(",", "").strip()
-    if s == "":
-        return default
-    try:
-        return int(float(s))
-    except Exception:
-        return default
-
-
-def _norm_key(s: str) -> str:
-    """제품명 매칭 키 정규화: NFKC, 소문자, 공백/NBSP 제거, 다양한 하이픈 통일"""
-    if s is None:
-        return ""
-    t = unicodedata.normalize("NFKC", str(s)).lower()
-    t = t.replace("\u00a0", " ").strip()
-    for h in ["‐", "-", "‒", "–", "—", "−", "﹘", "－"]:
-        t = t.replace(h, "-")
-    t = t.replace(" ", "")
-    return t
-
-
-# =========================================================
-# 샘플 카탈로그 (엑셀 미업로드 시 사용)
-# =========================================================
-def sample_catalog() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    df_check = pd.DataFrame(
-        {
-            "제품명": [
-                "SI-2",
-                "SI-3",
-                "SI-4",
-                "SI-5",
-                "SI-6",
-                "SI-7",
-                "SI-8",
-                "SI-9",
-                "SI-10",
-                "SI-11",
-            ],
-            "폭": [700, 700, 700, 500, 700, 450, 450, 450, 650, 750],
-            "길이": [900, 900, 900, 650, 900, 450, 450, 450, 900, 900],
-            "가격(원)": [8586, 8586, 8586, 6297, 8586, 4728, 4728, 4728, 8175, 8185],
-        }
-    )
-    df_body = pd.DataFrame(
-        {
-            "제품명": [
-                "SI-2",
-                "SI-3",
-                "SI-4",
-                "SI-5",
-                "SI-6",
-                "SI-7",
-                "SI-8",
-                "SI-9",
-                "SI-10",
-                "SI-11",
-            ],
-            "폭": [1300, 1300, 1350, 1350, 1450, 1000, 1200, 1200, 1370, 1260],
-            "길이": [2000, 1750, 1750, 1750, 1750, 1750, 1750, 2000, 1850, 1850],
-            "가격(원)": [
-                24877,
-                19467,
-                20465,
-                22778,
-                22091,
-                22305,
-                25854,
-                31177,
-                22091,
-                21026,
-            ],
-        }
-    )
-    df_side = pd.DataFrame(
-        {
-            "제품명": [
-                "700",
-                "800",
-                "900a",
-                "900b",
-                "1000",
-                "1200",
-                "2000",
-                "750",
-                "1100",
-            ],
-            "폭": [700, 800, 900, 900, 1000, 1200, 1200, 750, 1100],
-            "길이": [1750, 1750, 1750, 960, 1750, 1750, 2000, 1850, 1850],
-            "가격(원)": [14110, 15954, 18684, 10786, 19905, 23454, 28777, 14528, 20190],
-        }
-    )
-    return df_check, df_body, df_side
-
-
-# =========================================================
-# 카탈로그 파싱 (엑셀 시트: '천창판' 또는 '천장판')
-# =========================================================
-def _norm_col(k: str) -> Optional[str]:
-    k2 = re.sub(r"\s+", "", str(k)).lower()
-    if k2 in ("제품명", "제품", "품명", "item", "product", "name"):
-        return "제품명"
-    if k2 in ("폭", "가로", "width", "w"):
-        return "폭"
-    if k2 in ("길이", "세로", "length", "l"):
-        return "길이"
-    if k2 in ("소계", "가격", "price", "금액", "단가", "합계", "총액"):
-        return "가격(원)"
-    return None
-
-
-def _extract_section(df_raw: pd.DataFrame, title: str) -> pd.DataFrame:
-    df = df_raw.copy()
-    title_row = title_col = None
-    for r in range(min(15, len(df))):
-        for c in range(df.shape[1]):
-            v = str(df.iat[r, c]).strip() if pd.notna(df.iat[r, c]) else ""
-            if v == title:
-                title_row, title_col = r, c
-                break
-        if title_row is not None:
-            break
-    if title_row is None:
-        return pd.DataFrame(columns=["제품명", "폭", "길이", "가격(원)"])
-
-    header_row = title_row + 1
-    raw_cols = []
-    for c in range(title_col, title_col + 4):
-        v = (
-            str(df.iat[header_row, c]).strip()
-            if pd.notna(df.iat[header_row, c])
-            else ""
+def load_catalog_from_excel(
+    df: pd.DataFrame,
+) -> Tuple[List[Panel], List[Panel], List[Panel]]:
+    """
+    엑셀 '천장판' 시트 DataFrame → Panel 목록 3종(BODY, SIDE, HATCH).
+    예상 컬럼: [판넬/점검구, 품명, 폭, 길이, 소계]
+    """
+    req_cols = {"판넬/점검구", "품명", "폭", "길이", "소계"}
+    if not req_cols.issubset(set(df.columns)):
+        raise ValueError(
+            f"시트 컬럼이 다릅니다. 필요 컬럼: {req_cols}, 현재: {set(df.columns)}"
         )
-        raw_cols.append(v if v else f"col{c-title_col+1}")
 
-    rename = {}
-    for i, k in enumerate(raw_cols):
-        rename[k] = _norm_col(k) or ["제품명", "폭", "길이", "가격(원)"][i]
-
-    data = df.iloc[header_row + 1 :, title_col : title_col + 4].copy()
-    data.columns = [rename[k] for k in raw_cols]
-
-    if "가격(원)" not in data.columns and "소계" in data.columns:
-        data.rename(columns={"소계": "가격(원)"}, inplace=True)
-    if "제품명" not in data.columns:
-        data["제품명"] = ""
-
-    for col in ["폭", "길이", "가격(원)"]:
-        if col in data.columns:
-            data[col] = pd.to_numeric(
-                data[col].astype(str).str.replace(",", ""), errors="coerce"
-            )
-
-    if title == "점검구":
-        data = data[~data["제품명"].isna()].copy()
-    else:
-        data = data.dropna(subset=["폭", "길이"])
-
-    data["제품명"] = data["제품명"].astype(str).str.strip()
-    return data.reset_index(drop=True)[["제품명", "폭", "길이", "가격(원)"]]
-
-
-def parse_catalog(uploaded) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    try:
-        df_raw = pd.read_excel(uploaded, sheet_name="천창판", header=None)
-    except Exception:
-        df_raw = pd.read_excel(uploaded, sheet_name="천장판", header=None)
-    df_check = _extract_section(df_raw, "점검구")
-    df_body = _extract_section(df_raw, "바디판넬")
-    df_side = _extract_section(df_raw, "사이드판넬")
-    return df_check, df_body, df_side
-
-
-# =========================================================
-# 패널 변환/정리
-# =========================================================
-def filter_valid(df: pd.DataFrame, b_req: int) -> pd.DataFrame:
-    """길이 ≥ b_req, 그리고 길이 ≥ 폭(긴 변이 길이축)"""
-    if df is None or df.empty:
-        return pd.DataFrame(columns=df.columns)
-    d = df.copy()
-    return d[(d["길이"] >= b_req) & (d["길이"] >= d["폭"])].reset_index(drop=True)
-
-
-def df_to_panels(df: pd.DataFrame, kind: str) -> List[Panel]:
-    out: List[Panel] = []
-    if df is None or df.empty:
-        return out
+    body, side, hatch = [], [], []
     for _, r in df.iterrows():
-        w, l, p = _to_int(r["폭"]), _to_int(r["길이"]), _to_int(r["가격(원)"])
-        name = str(r["제품명"]).strip()
-        if w > 0 and l > 0:
-            out.append(Panel(kind, name, w, l, p))
-    return out
+        kind_raw = str(r["판넬/점검구"]).strip()
+        name = str(r["품명"]).strip()
+        try:
+            w = int(r["폭"])
+            l = int(r["길이"])
+            price = int(r["소계"])
+        except Exception:
+            # 사이드 900a/900b 처럼 '품명'이 이름인 경우 폭/길이 숫자 변환 확인
+            w = int(float(r["폭"]))
+            l = int(float(r["길이"]))
+            price = int(float(r["소계"]))
+        if "바디" in kind_raw:
+            body.append(Panel(name or "NONAME", "BODY", w, l, price))
+        elif "사이드" in kind_raw:
+            # 품명이 '900a'같이 숫자일 수도 있으니 SIDE- 접두 보정
+            name2 = name if name.startswith("SIDE-") else f"SIDE-{name}"
+            side.append(Panel(name2, "SIDE", w, l, price))
+        else:  # 점검구
+            hatch.append(Panel(name, "HATCH", w, l, price))
+    return body, side, hatch
 
 
-def oriented_variants(p: Panel) -> List[Oriented]:
-    """0°/90° 두 방향 모두 반환"""
-    return [
-        Oriented(panel=p, cw=p.width, cl=p.length, rotated=False),
-        Oriented(panel=p, cw=p.length, cl=p.width, rotated=True),
-    ]
+# =========================================
+# 엔진: 패널 선택/비용
+# =========================================
+def max_length_capable(catalog: List[Panel], need_w: int) -> int:
+    Ls = [p.l for p in catalog if p.w >= need_w]
+    return max(Ls) if Ls else 0
 
 
-# =========================================================
-# 점검구 가격 조회(바디명과 동일 모델)
-# =========================================================
-def get_check_price(df_check: pd.DataFrame, body_name: str) -> Tuple[int, bool]:
-    """(점검구 가격, is_double) 반환"""
-    df = df_check.copy()
-    df["__raw"] = df["제품명"].astype(str)
-    df["__key"] = df["__raw"].apply(_norm_key)
-    key = _norm_key(body_name)
+def pick_best_panel(
+    body_cat: List[Panel],
+    side_cat: List[Panel],
+    kind: Literal["BODY", "SIDE"],
+    need_w: int,
+    row_len: int,
+    row_idx: int,
+    notch: bool = False,
+) -> Optional[Tuple[Panel, bool, int, int]]:
+    """
+    한 셀(행·열)에 들어갈 최저가 패널 선택.
+    - 회전 허용: row_idx >= 2 and kind=="SIDE" and SIDE-900b only, need_w in (900,960], row_len <= 900.
+    - 길이/폭 초과시 절단 1컷씩 가산.
+    - 코너 샤워부는 행마다 notch(2컷) 추가.
+    """
+    catalog = body_cat if kind == "BODY" else side_cat
 
-    hit = df.loc[df["__key"] == key]
-    if hit.empty:
-        hit = df.loc[df["__key"].str.contains(key, na=False)]
-    if hit.empty:
-        # fuzzy
-        choices = df["__key"].tolist()
-        near = difflib.get_close_matches(key, choices, n=1, cutoff=0.8)
-        if near:
-            hit = df.loc[df["__key"] == near[0]]
+    best = None
+    # 회전 후보(SIDE-900b → 960×900)
+    if kind == "SIDE" and row_idx >= 2 and (900 < need_w <= 960) and (row_len <= 900):
+        rot = next((s for s in side_cat if s.name.endswith("900b")), None)
+        if rot:
+            cuts = (1 if 960 > need_w else 0) + (1 if 900 > row_len else 0)
+            extra = 2 if notch else 0
+            cost = rot.price + (cuts + extra) * CUT_COST
+            best = (rot, True, cuts + extra, cost)
 
-    if hit.empty:
-        return 0, False
+    # 비회전 후보
+    for p in catalog:
+        if p.w >= need_w and p.l >= row_len:
+            cuts = (1 if p.w > need_w else 0) + (1 if p.l > row_len else 0)
+            extra = 2 if notch else 0
+            cost = p.price + (cuts + extra) * CUT_COST
+            cand = (p, False, cuts + extra, cost)
+            if (best is None) or (cand[3] < best[3]):
+                best = cand
+    return best
 
-    price = _to_int(hit.iloc[0]["가격(원)"])
-    is_double = (
-        body_name.split("(")[0].strip() in DOUBLE_CHECK_NAMES
-        or body_name.strip() in DOUBLE_CHECK_NAMES
-    )
-    return price, is_double
+
+@dataclass
+class RowPlacement:
+    zone: str
+    kind: Literal["BODY", "SIDE"]
+    panel: Panel
+    rotated: bool
+    need_w: int
+    need_l: int
+    cuts: int
+    cost: int
 
 
-# =========================================================
-# 사각형 최적화 (B/S 카탈로그 전체 전수탐색)
-# =========================================================
-def eval_pattern_rect(
-    Wc: int,
-    Lc: int,
-    pattern: List[str],
-    bodies: List[Panel],
-    sides: List[Panel],
-    cut_cost: int,
-) -> List[Candidate]:
-    """패턴에 맞춰 모든 조합(회전 포함) 전수. 폭은 각 패널 cw ≥ Wc, 길이는 마지막만 컷 허용."""
+def fill_vertical_with_edge_align(
+    body_cat: List[Panel],
+    side_cat: List[Panel],
+    width_pattern: List[Tuple[Literal["BODY", "SIDE"], int, str]],
+    L_total: int,
+    is_corner_shower: bool = False,
+) -> Tuple[List[RowPlacement], Optional[str], int, List[int]]:
+    """
+    width_pattern = [(kind, need_w, zone_label), ...] (가로 열)
+    - 같은 행 모든 셀의 길이 동일
+    - 1행 길이 = min(잔여 L_total, 각 열이 수용 가능한 최대 길이 cap)
+    - 아래 방향(down)으로 반복 적층
+    - 코너형 샤워 열은 notch(2컷) 매 행 반영
+    반환: (rows, 에러, 총비용, 행길이리스트)
+    """
+    # 각 열 cap
+    caps = []
+    for k, w, _ in width_pattern:
+        cat = body_cat if k == "BODY" else side_cat
+        caps.append(max_length_capable(cat, w))
+    if 0 in caps:
+        return [], "불가: 해당 폭에서 가능한 패널 없음", 0, []
 
-    # 각 타입별 '폭 적합' 오리엔트 필터
-    def valid_orients(kind: str) -> List[Oriented]:
-        base = bodies if kind == "B" else sides
-        out: List[Oriented] = []
-        for p in base:
-            for o in oriented_variants(p):
-                if o.cw >= Wc:  # 폭 못 가로지르면 불가
-                    out.append(o)
-        return out
+    rows: List[RowPlacement] = []
+    row_lengths: List[int] = []
+    total_cost = 0
+    L_remain = int(L_total)
+    row_idx = 1
 
-    pools = [valid_orients(k) for k in pattern]
-    if any(len(pool) == 0 for pool in pools):
+    while L_remain > 0:
+        row_len = min([L_remain] + caps)
+        if row_len <= 0:
+            return [], "불가: 세로길이 배치 실패", 0, []
+        row_lengths.append(row_len)
+
+        for kind, need_w, zone in width_pattern:
+            notch = kind == "SIDE" and is_corner_shower
+            pick = pick_best_panel(
+                body_cat, side_cat, kind, need_w, row_len, row_idx, notch=notch
+            )
+            if pick is None:
+                return (
+                    [],
+                    f"불가: {zone} 폭≥{need_w}, 길이≥{row_len} 충족 패널 없음",
+                    0,
+                    [],
+                )
+            p, rotated, cuts, cost = pick
+            rows.append(
+                RowPlacement(
+                    f"{zone}/행{row_idx}", kind, p, rotated, need_w, row_len, cuts, cost
+                )
+            )
+            total_cost += cost
+
+        L_remain -= row_len
+        row_idx += 1
+
+    return rows, None, total_cost, row_lengths
+
+
+# =========================================
+# 가로 패턴 열거 (사각형)
+# =========================================
+def enumerate_patterns_rect(
+    Wp: int, split: int, mode: Literal["2", "3", "4"], enable_side_bojo: bool = True
+):
+    """
+    사각형 가로 패턴 열거
+    - 2판: 기본(BODY=S, SIDE=H), (보조) S>1450이면 SIDE가 경계선을 넘어 세면부 일부 보조(B≤1450, R≤1200, R≥H, B+R=Wp)
+    - 3판: (세면2+샤워1) 또는 (세면1+샤워2) — 보조 미적용
+    - 4판: (세면1+샤워1) 한정 — BODY≤1450, SIDE≤1200 조건
+    """
+    S = split + 50  # 세면 요구폭
+    H = Wp - S  # 샤워 요구폭
+    if S <= 0 or H <= 0:
         return []
 
-    candidates: List[Candidate] = []
-    for combo in itertools.product(*pools):
-        oriented_list: List[Oriented] = list(combo)
+    pats: List[List[Tuple[str, int, str]]] = []
 
-        # 길이 합/컷 규칙 체크
-        acc = 0
-        ok = True
-        for i, o in enumerate(oriented_list):
-            if i < len(oriented_list) - 1:
-                if (
-                    acc + o.cl >= Lc
-                ):  # 중간 판이 Lc를 넘으면 '마지막만 길이컷' 규칙 위반
-                    ok = False
-                    break
-                acc += o.cl
-            else:
-                # 마지막 장
-                last_sum = acc + o.cl
-                if last_sum < Lc:
-                    ok = False
-                    break
-                length_cut_last = 1 if last_sum > Lc else 0
+    if mode == "4":
+        B = min(BODY_MAX_W, S)
+        R = Wp - B
+        if 0 < R <= SIDE_MAX_W:
+            pats.append([("BODY", B, "세면-열1"), ("SIDE", R, "샤워-열1")])
+        return pats
 
-        if not ok:
-            continue
+    if mode == "2":
+        # 기본
+        if S <= BODY_MAX_W and H <= SIDE_MAX_W:
+            pats.append([("BODY", S, "세면-열1"), ("SIDE", H, "샤워-열1")])
+        # 보조 (S>1450)
+        if enable_side_bojo and S > BODY_MAX_W:
+            R_min = max(H, Wp - BODY_MAX_W)
+            R_max = min(SIDE_MAX_W, Wp)
+            R_min = ((R_min + STEP_MM - 1) // STEP_MM) * STEP_MM
+            R_max = (R_max // STEP_MM) * STEP_MM
+            for R in range(R_min, R_max + 1, STEP_MM):
+                B = Wp - R
+                if 0 < B <= BODY_MAX_W and H <= R <= SIDE_MAX_W:
+                    pats.append(
+                        [("BODY", B, "세면-열1"), ("SIDE", R, "샤워-열1(보조 포함)")]
+                    )
+        return pats
 
-        # 폭컷(각 장 독립) / 자재비 / 컷비
-        width_cuts = [1 if o.cw > Wc else 0 for o in oriented_list]
-        material_cost = sum(o.panel.price for o in oriented_list)
-        total_cuts = sum(width_cuts) + length_cut_last
-        cut_cost_total = total_cuts * cut_cost
-        total_cost = material_cost + cut_cost_total
+    # 3열(세면2+샤워1) 또는 (세면1+샤워2), 보조 미적용
+    def gen_cols(total: int, ncols: int, side_label: str):
+        out = []
+        kinds = ["BODY", "SIDE"]
 
-        candidates.append(
-            Candidate(
-                pattern=pattern,
-                oriented=oriented_list,
-                width_cuts=width_cuts,
-                length_cut_last=length_cut_last,
-                material_cost=material_cost,
-                cut_cost=cut_cost_total,
-                total_cost=total_cost,
-            )
-        )
+        def dfs(idx: int, rem: int, acc):
+            if idx == ncols:
+                if rem == 0:
+                    out.append(acc.copy())
+                return
+            min_rem_need = STEP_MM * (ncols - idx - 1)
+            for kind in kinds:
+                cap = BODY_MAX_W if kind == "BODY" else SIDE_MAX_W
+                w_max = min(cap, rem - min_rem_need)
+                w_min = STEP_MM
+                if w_max < w_min:
+                    continue
+                for w in range(w_min, w_max + 1, STEP_MM):
+                    acc.append((kind, w, f"{side_label}{idx+1}"))
+                    dfs(idx + 1, rem - w, acc)
+                    acc.pop()
 
-    # 정렬(총비용 → 총컷수 → 자재비)
-    candidates.sort(
-        key=lambda c: (
-            c.total_cost,
-            (sum(c.width_cuts) + c.length_cut_last),
-            c.material_cost,
-        )
+        dfs(0, total, [])
+        return out
+
+    left2 = gen_cols(S, 2, "세면-열")
+    right1 = gen_cols(H, 1, "샤워-열")
+    left1 = gen_cols(S, 1, "세면-열")
+    right2 = gen_cols(H, 2, "샤워-열")
+    for lc in left2:
+        for rc in right1:
+            pats.append(lc + rc)
+    for lc in left1:
+        for rc in right2:
+            pats.append(lc + rc)
+
+    # 중복 제거(라벨 단순화)
+    uniq, seen = [], set()
+    for p in pats:
+        sig = tuple((k, w, z.split("/")[0]) for (k, w, z) in p)
+        if sig not in seen:
+            seen.add(sig)
+            uniq.append(p)
+    return uniq
+
+
+@dataclass
+class PatternCost:
+    pattern: List[Tuple[str, int, str]]
+    rows: List[RowPlacement]
+    total_cost: int
+    fail_reason: Optional[str] = None
+    row_lengths: Optional[List[int]] = None
+
+
+def cost_of_pattern(
+    body_cat: List[Panel],
+    side_cat: List[Panel],
+    pattern,
+    Lp: int,
+    is_corner_shower=False,
+) -> PatternCost:
+    rows, err, tot, rls = fill_vertical_with_edge_align(
+        body_cat, side_cat, pattern, Lp, is_corner_shower=is_corner_shower
     )
-    return candidates
+    if err:
+        return PatternCost(pattern, [], 10**12, err, rls)
+    return PatternCost(pattern, rows, tot, None, rls)
 
 
-def optimize_rect(
+def search_min_cost_rect(
+    body_cat: List[Panel],
+    side_cat: List[Panel],
     W: int,
     L: int,
-    df_check: pd.DataFrame,
-    df_body: pd.DataFrame,
-    df_side: pd.DataFrame,
-    cut_cost: int,
-    mgmt_ratio_pct: float,
-) -> Dict[str, Any]:
-    # 입력 검증 & 보정
-    if L < W:
-        return {"status": "error", "message": "길이 L ≥ 폭 W 조건이 필요합니다."}
-    if W > 1900:
-        return {"status": "error", "message": "폭 W ≤ 1900 제한을 초과했습니다."}
-    Wc, Lc = int(W + 100), int(L + 100)
-
-    bodies = df_to_panels(df_body, "B")
-    sides = df_to_panels(df_side, "S")
-    if not bodies or not sides:
-        return {
-            "status": "error",
-            "message": "카탈로그에서 바디/사이드 표를 찾지 못했습니다.",
-        }
-
-    # 패턴들
-    patterns = [
-        ["B"],
-        ["B", "S"],
-        ["B", "S", "S"],
-        ["B", "B", "S"],
-        ["B", "B", "S", "S"],
-    ]
-
-    all_cands: List[Candidate] = []
-    for pat in patterns:
-        all_cands += eval_pattern_rect(Wc, Lc, pat, bodies, sides, cut_cost)
-
-    if not all_cands:
-        return {"status": "no_solution", "message": "구성 가능한 조합이 없습니다."}
-
-    best = all_cands[0]
-
-    # 점검구(바디와 동일 모델) – 첫 번째 B의 이름 사용
-    first_body = next((o for o in best.oriented if o.panel.kind == "B"), None)
-    check_price, is_double = get_check_price(
-        df_check, first_body.panel.name if first_body else ""
+    split: int,
+    mode: Literal["2", "3", "4"],
+    enable_side_bojo=True,
+) -> PatternCost:
+    Wp, Lp = install_space_rect(W, L)
+    pats = enumerate_patterns_rect(
+        Wp, split, mode=mode, enable_side_bojo=enable_side_bojo
     )
-    check_total = check_price * (2 if is_double else 1)
-
-    subtotal = best.material_cost + best.cut_cost + check_total
-    mgmt_total = int(round(subtotal * (1.0 + mgmt_ratio_pct / 100.0)))
-
-    # 결과 구성
-    def row(c: Candidate) -> Dict[str, Any]:
-        names = []
-        spans = []
-        rots = []
-        wcuts = []
-        for i, o in enumerate(c.oriented):
-            names.append(f"{o.panel.name}")
-            spans.append(f"{o.cw}×{o.cl}")
-            rots.append("90°" if o.rotated else "0°")
-            wcuts.append(c.width_cuts[i])
-        return {
-            "패턴": "+".join(c.pattern),
-            "패널명": " + ".join(names),
-            "배치치수(cw×cl)": " + ".join(spans),
-            "회전": " + ".join(rots),
-            "폭컷": sum(wcuts),
-            "마지막 길이컷": c.length_cut_last,
-            "총컷수": sum(wcuts) + c.length_cut_last,
-            "자재비": c.material_cost,
-            "절단비": c.cut_cost,
-            "총비용": c.total_cost,
-        }
-
-    top = [row(c) for c in all_cands[:20]]
-
-    return {
-        "status": "ok",
-        "mode": "rect",
-        "Wc": Wc,
-        "Lc": Lc,
-        "best": row(best),
-        "top": top,
-        "detail_best": best,
-        "mgmt_total": mgmt_total,
-        "subtotal": subtotal,
-        "check_price_each": check_price,
-        "check_double": is_double,
-    }
+    if not pats:
+        return PatternCost([], [], 10**12, "가로 패턴 없음", [])
+    best: Optional[PatternCost] = None
+    for pat in pats:
+        pc = cost_of_pattern(body_cat, side_cat, pat, Lp, is_corner_shower=False)
+        if pc.fail_reason:
+            continue
+        if (best is None) or (pc.total_cost < best.total_cost):
+            best = pc
+    return best if best else PatternCost([], [], 10**12, "모든 패턴 불가", [])
 
 
-# =========================================================
-# 코너형 최적화 (세면부=B 전용, 샤워부=S 전용)
-# =========================================================
-def optimize_zone(
-    Wc: int, Lc: int, kind: str, bodies: List[Panel], sides: List[Panel], cut_cost: int
-) -> Optional[Candidate]:
-    """영역 하나(세면부 or 샤워부)에 대해 허용 패턴 전수 후 최소값 선택"""
-    if kind == "B":
-        patterns = [["B"], ["B", "B"]]
-        return (
-            eval_pattern_rect(Wc, Lc, patterns[0], bodies, sides, cut_cost)
-            + eval_pattern_rect(Wc, Lc, patterns[1], bodies, sides, cut_cost)
-            or [None]
-        )[0]
-    else:
-        patterns = [["S"], ["S", "S"]]
-        # bodies/sides는 eval 함수 안에서 pattern에 맞게 사용됨
-        cands = []
-        cands += eval_pattern_rect(Wc, Lc, patterns[0], bodies, sides, cut_cost)
-        cands += eval_pattern_rect(Wc, Lc, patterns[1], bodies, sides, cut_cost)
-        return cands[0] if cands else None
-
-
-def optimize_corner(
-    S_W: int,
-    S_L: int,
-    H_W: int,
-    H_L: int,
-    df_check: pd.DataFrame,
-    df_body: pd.DataFrame,
-    df_side: pd.DataFrame,
-    cut_cost: int,
-    mgmt_ratio_pct: float,
-) -> Dict[str, Any]:
-    # 보정치수
-    S_Wc, S_Lc = int(S_W + 100), int(S_L + 100)
-    H_Wc, H_Lc = int(H_W + 100), int(H_L + 0)
-
-    if S_Wc <= 0 or S_Lc <= 0 or H_Wc <= 0 or H_Lc < 0:
-        return {"status": "error", "message": "치수가 올바르지 않습니다."}
-    if S_W < H_W:
-        return {
-            "status": "error",
-            "message": "S_W ≥ H_W 조건(오목부 높이 ≥ 0)이 필요합니다.",
-        }
-
-    bodies = df_to_panels(df_body, "B")
-    sides = df_to_panels(df_side, "S")
-    if not bodies or not sides:
-        return {
-            "status": "error",
-            "message": "카탈로그에서 바디/사이드 표를 찾지 못했습니다.",
-        }
-
-    # 영역별 최적
-    best_sink = optimize_zone(S_Wc, S_Lc, "B", bodies, sides, cut_cost)
-    best_shower = optimize_zone(H_Wc, H_Lc, "S", bodies, sides, cut_cost)
-    if (best_sink is None) or (best_shower is None):
-        return {
-            "status": "no_solution",
-            "message": "세면부/샤워부 중 구성 불가 영역이 있습니다.",
-        }
-
-    # 합산
-    total_material = best_sink.material_cost + best_shower.material_cost
-    total_cuts = (sum(best_sink.width_cuts) + best_sink.length_cut_last) + (
-        sum(best_shower.width_cuts) + best_shower.length_cut_last
-    )
-    total_cut_cost = total_cuts * cut_cost
-    total_cost = total_material + total_cut_cost
-
-    # 점검구(세면부 첫 바디 기준)
-    first_body = next((o for o in best_sink.oriented if o.panel.kind == "B"), None)
-    check_price, is_double = get_check_price(
-        df_check, first_body.panel.name if first_body else ""
-    )
-    check_total = check_price * (2 if is_double else 1)
-
-    subtotal = total_material + total_cut_cost + check_total
-    mgmt_total = int(round(subtotal * (1.0 + mgmt_ratio_pct / 100.0)))
-
-    def row_zone(c: Candidate, label: str) -> Dict[str, Any]:
-        names = " + ".join(o.panel.name for o in c.oriented)
-        spans = " + ".join(f"{o.cw}×{o.cl}" for o in c.oriented)
-        rots = " + ".join("90°" if o.rotated else "0°" for o in c.oriented)
-        wcuts = sum(1 if o.cw > 0 else 0 for o in c.oriented)  # 표시용
-        return {
-            "영역": label,
-            "패턴": "+".join(c.pattern),
-            "패널명": names,
-            "배치치수(cw×cl)": spans,
-            "회전": rots,
-            "폭컷": sum(c.width_cuts),
-            "마지막 길이컷": c.length_cut_last,
-            "총컷수": sum(c.width_cuts) + c.length_cut_last,
-            "자재비": c.material_cost,
-            "절단비": c.cut_cost,
-            "부분합": c.total_cost,
-        }
-
-    return {
-        "status": "ok",
-        "mode": "corner",
-        "S_Wc": S_Wc,
-        "S_Lc": S_Lc,
-        "H_Wc": H_Wc,
-        "H_Lc": H_Lc,
-        "sink": row_zone(best_sink, "세면부(B)"),
-        "shower": row_zone(best_shower, "샤워부(S)"),
-        "sum_material": total_material,
-        "sum_cut_cost": total_cut_cost,
-        "sum_total_cost": total_cost,
-        "mgmt_total": mgmt_total,
-        "subtotal": subtotal,
-        "check_price_each": check_price,
-        "check_double": is_double,
-    }
-
-
-# =========================================================
-# SVG 렌더링 (사각형 치수 + 패널 윤곽 오버레이 / 코너형 넘버링)
-# =========================================================
-def svg_arrow(
-    x1, y1, x2, y2, label=None, label_pos="mid", stroke="#333", w=1.2, arrow=True
+def search_min_cost_rect_global(
+    body_cat: List[Panel],
+    side_cat: List[Panel],
+    W: int,
+    L: int,
+    split: int,
+    enable_side_bojo=True,
 ):
-    marker = ""
-    defs = ""
-    if arrow:
-        marker = 'marker-end="url(#arrow)" marker-start="url(#arrow)"'
-        defs = """
-        <defs>
-          <marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L6,3 z" fill="#333"/>
-          </marker>
-        </defs>
-        """
-    line = f'<line x1="{x1:.2f}" y1="{y1:.2f}" x2="{x2:.2f}" y2="{y2:.2f}" stroke="{stroke}" stroke-width="{w}" {marker}/>'
-    lbl = ""
-    if label:
-        if label_pos == "mid":
-            tx = (x1 + x2) / 2
-            ty = (y1 + y2) / 2 - 6
-        elif label_pos == "end":
-            tx, ty = x2, y2 - 6
-        else:
-            tx, ty = x1, y1 - 6
-        lbl = f'<text x="{tx:.1f}" y="{ty:.1f}" text-anchor="middle" font-size="11" fill="#111">{label}</text>'
-    return defs + line + lbl
-
-
-def render_rect_with_panels(
-    Wc: int, Lc: int, best: Optional[Candidate], title="사각형(보정치수 + 패널윤곽)"
-):
-    # 스케일
-    max_w_px, max_h_px = MAX_RECT_CANVAS_W, MAX_RECT_CANVAS_H
-    scale = min(max_w_px / max(Lc, 1), max_h_px / max(Wc, 1))
-    W = Lc * scale
-    H = Wc * scale
-    pad = 24
-
-    outer = f'<rect x="{pad}" y="{pad}" width="{W:.2f}" height="{H:.2f}" fill="none" stroke="#111" stroke-width="1.5"/>'
-    y_dim = pad + H + 18
-    dim_h = svg_arrow(pad, y_dim, pad + W, y_dim, label=f"Lc = {Lc} mm")
-    x_dim = pad - 18
-    dim_v = svg_arrow(x_dim, pad + H, x_dim, pad, label=f"Wc = {Wc} mm")
-
-    # 패널 윤곽(빨강=바디, 파랑=사이드), 길이축으로 이어붙임
-    overlays = ""
-    if best is not None:
-        acc = 0
-        for i, o in enumerate(best.oriented):
-            used_len = o.cl
-            if i == len(best.oriented) - 1:
-                used_len = max(0, Lc - acc)  # 마지막 장은 남은 길이만큼(컷 반영)
-            # 사각형 내부 좌표: x = pad + acc*scale, width = used_len*scale, height = H
-            x0 = pad + acc * scale
-            y0 = pad
-            w = used_len * scale
-            h = H
-            color = "#e11" if o.panel.kind == "B" else "#06c"
-            overlays += f'<rect x="{x0:.2f}" y="{y0:.2f}" width="{w:.2f}" height="{h:.2f}" fill="none" stroke="{color}" stroke-width="2"/>'
-            # 라벨
-            name = o.panel.name
-            rot = "90°" if o.rotated else "0°"
-            overlays += f'<text x="{x0+w/2:.1f}" y="{y0+14:.1f}" text-anchor="middle" font-size="10" fill="{color}">{name} ({rot})</text>'
-            acc += o.cl
-
-    lbl = f'<text x="{pad + W/2:.1f}" y="{pad - 8}" text-anchor="middle" font-size="12">{title}</text>'
-    svg = f"""
-    <svg viewBox="0 0 {W+pad*2:.0f} {H+pad*2+40:.0f}" width="{W+pad*2:.0f}" height="{H+pad*2+40:.0f}" xmlns="http://www.w3.org/2000/svg">
-      {outer}{overlays}{dim_h}{dim_v}{lbl}
-    </svg>
-    """
-    components.html(svg, height=int(H + pad * 2 + 60), scrolling=False)
-
-
-def render_corner_numbered(
-    S_W: int, S_L: int, H_W: int, H_L: int, title="코너형(넘버링/치수)"
-):
-    # 변 길이(원치수 기준)
-    s1 = S_L + H_L  # 1번(하단)
-    s2 = S_W  # 2번(우측 전체)
-    s3 = S_L  # 3번(상단 좌측)
-    s4 = S_W - H_W  # 4번(좌측 상단)
-    s5 = H_L  # 5번(오목부 하단)
-    s6 = H_W  # 6번(우측 상단)
-    if s4 < 0:
-        components.html(
-            '<p style="color:#c00;">오류: S_W ≥ H_W 조건 필요 (오목부 높이가 음수)</p>',
-            height=40,
+    cands = []
+    for m in ["2", "3", "4"]:
+        cands.append(
+            (
+                m,
+                search_min_cost_rect(
+                    body_cat,
+                    side_cat,
+                    W,
+                    L,
+                    split,
+                    mode=m,
+                    enable_side_bojo=enable_side_bojo,
+                ),
+            )
         )
-        return
-
-    # 전체 외곽(오목부 포함)
-    L_total, W_total = s1, s2
-
-    # 화면 1/3 정도로 스케일
-    max_w_px, max_h_px = MAX_RECT_CANVAS_W, MAX_RECT_CANVAS_H
-    scale = min(max_w_px / max(L_total, 1), max_h_px / max(W_total, 1))
-
-    # 패딩(↘️ 오버랩 방지 & 우측 살짝 이동)
-    pad_left = 60  # ⬅️ 도형을 오른쪽으로
-    pad_right = 32
-    pad_top = 46  # ⬆️ 상단 여백↑ (제목/3번 라벨 겹침 방지)
-    pad_bottom = 52  # ⬇️ 하단 여백↑ (1번 라벨 하단 공간)
-
-    L = L_total * scale
-    W = W_total * scale
-
-    # 꼭짓점 좌표 (시계방향 A~F)
-    A = (pad_left, pad_top + W)  # 좌하
-    B = (pad_left + L, pad_top + W)  # 우하
-    C = (pad_left + L, pad_top + W - s6 * scale)  # 우상단 오목 아래
-    D = (pad_left + s3 * scale, pad_top + W - s6 * scale)  # 오목 코너
-    E = (pad_left + s3 * scale, pad_top)  # 좌상
-    F = (pad_left, pad_top)  # 좌상 좌
-
-    # 외곽 폴리라인
-    poly = f"""
-      <path d="M {A[0]:.2f},{A[1]:.2f} L {B[0]:.2f},{B[1]:.2f} L {C[0]:.2f},{C[1]:.2f}
-               L {D[0]:.2f},{D[1]:.2f} L {E[0]:.2f},{E[1]:.2f} L {F[0]:.2f},{F[1]:.2f} Z"
-            fill="none" stroke="#111" stroke-width="1.6"/>
-    """
-
-    # 라벨 위치(모두 '보이는 쪽'으로 이동: 2·6은 우측 내부, 3은 상단 내부)
-    t1 = ((A[0] + B[0]) / 2, A[1] + 18)  # 1: 하단, 바깥 아래
-    t2 = (pad_left - 12, pad_top + W / 2)  # 2: 좌측 중
-    t3 = ((F[0] + E[0]) / 2, F[1] + 14)  # 3: 상단 좌측, 내부(아래쪽)
-    t4 = (E[0] + 8, (E[1] + D[1]) / 2)  # 4: 좌측 상단, 내부
-    t5 = ((D[0] + C[0]) / 2, D[1] + 16)  # 5: 오목부 하단, 내부
-    t6 = (B[0] - 8, (B[1] + C[1]) / 2)  # 6: 우측 상단, 내부
-
-    labels = f"""
-      <text x="{t1[0]:.1f}" y="{t1[1]:.1f}" text-anchor="middle" font-size="11">1: {s1} mm</text>
-      <text x="{t2[0]:.1f}" y="{t2[1]:.1f}" text-anchor="end" font-size="11">2:    {s2} mm</text>
-      <text x="{t3[0]:.1f}" y="{t3[1]:.1f}" text-anchor="middle" font-size="11">3: {s3} mm</text>
-      <text x="{t4[0]:.1f}" y="{t4[1]:.1f}" text-anchor="start"  font-size="11">4: {s4} mm</text>
-      <text x="{t5[0]:.1f}" y="{t5[1]:.1f}" text-anchor="middle" font-size="11">5: {s5} mm</text>
-      <text x="{t6[0]:.1f}" y="{t6[1]:.1f}" text-anchor="end"    font-size="11">6: {s6} mm</text>
-    """
-
-    header = f"""
-      <text x="{pad_left + L/2:.1f}" y="{pad_top - 16}" text-anchor="middle" font-size="12">{title}</text>
-      <text x="{pad_left + L/2:.1f}" y="{pad_top + W + 34}" text-anchor="middle" font-size="10" fill="#444">
-        규칙: 1 = 3 + 5 = {s3} + {s5} = {s1},  2 = 4 + 6 = {s4} + {s6} = {s2}
-      </text>
-    """
-
-    view_w = L + pad_left + pad_right
-    view_h = W + pad_top + pad_bottom
-
-    svg = f"""
-    <svg viewBox="0 0 {view_w:.0f} {view_h + 40:.0f}" width="{view_w:.0f}" height="{view_h + 40:.0f}" xmlns="http://www.w3.org/2000/svg">
-      {poly}{labels}{header}
-    </svg>
-    """
-    components.html(svg, height=int(view_h + 60), scrolling=False)
+    m_best, pc_best = min(cands, key=lambda x: x[1].total_cost if x[1].rows else 10**12)
+    return m_best, pc_best
 
 
-# =========================================================
-# Streamlit UI
-# =========================================================
-st.set_page_config(page_title="천장판 최적 조합(치수/넘버링 포함)", layout="wide")
-st.title("욕실 천장판 최적 조합 (사각형 / 코너형) • 치수선/넘버링 표시")
+def search_min_cost_corner_joint(
+    body_cat: List[Panel],
+    side_cat: List[Panel],
+    v1: int,
+    v2: int,
+    v3: int,
+    v4: int,
+    v5: int,
+    v6: int,
+    allow_side_bojo: bool = True,
+) -> PatternCost:
+    (sw, sl), (ww, wl) = install_spaces_corner(v1, v2, v3, v4, v5, v6)
+    total_Wp = sw + ww
+    patterns: List[List[Tuple[str, int, str]]] = []
 
-with st.sidebar:
-    st.header("입력 / 설정")
-    mode = st.radio("욕실 형태", ["사각형", "코너형(L자)"])
-    st.markdown("---")
-    uploaded = st.file_uploader(
-        "카탈로그 엑셀 업로드 (시트: '천창판')", type=["xlsx", "xls"]
+    if sw <= BODY_MAX_W and ww <= SIDE_MAX_W:
+        patterns.append([("BODY", sw, "세면"), ("SIDE", ww, "샤워")])
+
+    if allow_side_bojo and (sw > BODY_MAX_W) and (total_Wp <= BODY_MAX_W + SIDE_MAX_W):
+        B_min = total_Wp - SIDE_MAX_W
+        B_max = min(BODY_MAX_W, total_Wp - ww)
+        if B_min <= B_max:
+            B_min = ((B_min + STEP_MM - 1) // STEP_MM) * STEP_MM
+            B_max = (B_max // STEP_MM) * STEP_MM
+            for B in range(B_min, B_max + 1, STEP_MM):
+                R = total_Wp - B
+                if 0 < B <= BODY_MAX_W and ww <= R <= SIDE_MAX_W:
+                    patterns.append(
+                        [("BODY", B, "세면"), ("SIDE", R, "샤워(보조 포함)")]
+                    )
+
+    best = None
+    for pat in patterns:
+        pc = cost_of_pattern(body_cat, side_cat, pat, sl, is_corner_shower=True)
+        if pc.fail_reason:
+            continue
+        if (best is None) or (pc.total_cost < best.total_cost):
+            best = pc
+    return best if best else PatternCost([], [], 10**12, "코너 2열 불가", [])
+
+
+# =========================================
+# 결과 요약 & 요소 테이블
+# =========================================
+def summarize_solution(
+    pc: PatternCost, meta: Dict
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
+    """요약표, 요소표, JSON용 기초데이터(개수/단가 합산)"""
+    cols = len(pc.pattern)
+    rows_len = (len(pc.rows) // cols) if (cols > 0 and pc.rows) else 0
+
+    total_panels = len(pc.rows)
+    total_cuts = sum(r.cuts for r in pc.rows)
+    total_cost = pc.total_cost
+    body_cnt = sum(1 for r in pc.rows if r.kind == "BODY")
+    side_cnt = total_panels - body_cnt
+
+    # 크기별(모델별) 개수
+    mix_counter = Counter(
+        f"{r.panel.name}{'(rot)' if r.rotated else ''} {r.panel.w}x{r.panel.l}"
+        for r in pc.rows
     )
-    use_sample = st.checkbox("업로드 없으면 샘플 DB 사용", value=True)
-    cut_cost = st.number_input(
-        "절단 1회당 공임 C(원)", min_value=0, value=CUT_COST_DEFAULT, step=500
-    )
-    mgmt_ratio_pct = st.number_input(
-        "관리비율 r(%)", min_value=0.0, value=MGMT_RATIO_DEFAULT, step=0.5
-    )
+    # kind별/규격별 카운트
+    kind_size_counter = defaultdict(int)
+    for r in pc.rows:
+        k = f"{r.kind}:{r.panel.w}x{r.panel.l}"
+        kind_size_counter[k] += 1
 
-# 카탈로그 로딩
-if uploaded is not None:
+    # 요약 DF
+    summary_dict = {
+        **meta,
+        "배치행렬": f"{rows_len}x{cols}" if pc.rows else "-",
+        "총판넬수": total_panels,
+        "바디개수": body_cnt,
+        "사이드개수": side_cnt,
+        "크기별개수": dict(mix_counter),
+        "총절단수": total_cuts,
+        "총단가합계": total_cost,
+        "실패사유": pc.fail_reason or "",
+    }
+    df_summary = pd.DataFrame([summary_dict])
+
+    # 요소 DF
+    rows_out = []
+    # 행 길이 목록 → 행번호/길이 표기(배치행렬 스케치에도 사용)
+    row_lengths = pc.row_lengths or []
+    row_len_map = {i + 1: L for i, L in enumerate(row_lengths)}
+
+    # 열 폭(need_w) 시그니처(패턴으로부터)
+    col_widths = [w for _, w, _ in pc.pattern]
+
+    # rows를 행 단위로 보기 좋게
+    if pc.rows:
+        cols_n = len(pc.pattern)
+        for i, r in enumerate(pc.rows):
+            # 행/열 번호
+            row_idx = (i // cols_n) + 1
+            col_idx = (i % cols_n) + 1
+            rows_out.append(
+                {
+                    "행": row_idx,
+                    "열": col_idx,
+                    "zone": r.zone,
+                    "kind": r.kind,
+                    "model": r.panel.name + ("(rot)" if r.rotated else ""),
+                    "need_w": r.need_w,
+                    "need_l": r.need_l,
+                    "panel_w": r.panel.w,
+                    "panel_l": r.panel.l,
+                    "cuts": r.cuts,
+                    "unit_price": r.panel.price,
+                    "cell_cost": r.cost,
+                }
+            )
+    df_elements = pd.DataFrame(rows_out)
+
+    # JSON 기본 파츠: kind별/규격별 개수, 총단가
+    json_parts = {
+        "총개수": int(total_panels),
+        "총절단": int(total_cuts),
+        "총단가": int(total_cost),
+        "kind_size_counts": dict(kind_size_counter),
+        "row_lengths": row_lengths,
+        "col_widths": col_widths,
+    }
+    return df_summary, df_elements, json_parts
+
+
+# =========================================
+# Pillow 폰트 로딩
+# =========================================
+def _get_font(size: int = 16) -> Optional[ImageFont.FreeTypeFont]:
+    """한글 폰트 로딩 (NanumGothic.ttf → 시스템 폰트 → 기본)"""
     try:
-        df_check, df_body_raw, df_side_raw = parse_catalog(uploaded)
+        return ImageFont.truetype("NanumGothic.ttf", size)
+    except Exception:
+        try:
+            return ImageFont.truetype("malgun.ttf", size)  # Windows
+        except Exception:
+            try:
+                return ImageFont.truetype(
+                    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf", size
+                )  # Linux
+            except Exception:
+                return ImageFont.load_default()
+
+
+# =========================================
+# 도면 그리기 (평면도)
+# =========================================
+def draw_rect_plan(
+    W: int, L: int, split: Optional[int] = None, canvas_w: int = 760, margin: int = 20
+) -> Image.Image:
+    CANVAS_W = int(canvas_w)
+    MARGIN = int(margin)
+    sx = (CANVAS_W - 2 * MARGIN) / max(1.0, float(W))
+    sy = sx
+    CANVAS_H = int(L * sy + 2 * MARGIN)
+    img = Image.new("RGB", (CANVAS_W, CANVAS_H), "white")
+    drw = ImageDraw.Draw(img)
+    x0, y0 = MARGIN, MARGIN
+    x1 = x0 + int(W * sx)
+    y1 = y0 + int(L * sy)
+    drw.rectangle([x0, y0, x1, y1], outline="black", width=3)
+
+    if split is not None:
+        gx = x0 + int(split * sx)
+        drw.line([gx, y0, gx, y1], fill="blue", width=3)
+
+        # 라벨 추가
+        font = _get_font(14)
+        drw.text((x0 + split * sx // 2, y0 + 10), "세면부", fill="darkblue", font=font)
+        drw.text(
+            (x0 + split * sx + (x1 - gx) // 2 - 20, y0 + 10),
+            "샤워부",
+            fill="darkblue",
+            font=font,
+        )
+
+    return img
+
+
+def draw_corner_plan(
+    v1: int,
+    v2: int,
+    v3: int,
+    v4: int,
+    v5: int,
+    v6: int,
+    split_on: bool = False,
+    canvas_w: int = 760,
+    margin: int = 20,
+) -> Image.Image:
+    CANVAS_W = int(canvas_w)
+    MARGIN = int(margin)
+    sx = (CANVAS_W - 2 * MARGIN) / max(1.0, float(v1))
+    sy = sx
+    CANVAS_H = int(v2 * sy + 2 * MARGIN)
+    img = Image.new("RGB", (CANVAS_W, CANVAS_H), "white")
+    drw = ImageDraw.Draw(img)
+    x0, y0 = MARGIN, MARGIN
+
+    def X(mm):
+        return int(round(x0 + mm * sx))
+
+    def Y(mm):
+        return int(round(y0 + mm * sy))
+
+    drw.rectangle([X(0), Y(0), X(v1), Y(v2)], outline="black", width=3)
+    notch_x0, notch_x1 = v1 - v5, v1
+    notch_y0, notch_y1 = 0, v6
+    drw.rectangle(
+        [X(notch_x0), Y(notch_y0), X(notch_x1), Y(notch_y1)],
+        fill="white",
+        outline="white",
+    )
+    drw.line([X(notch_x0), Y(0), X(notch_x0), Y(v6)], fill="black", width=3)
+    drw.line([X(notch_x0), Y(v6), X(v1), Y(v6)], fill="black", width=3)
+
+    if split_on:
+        drw.line([X(v3), Y(0), X(v3), Y(v2)], fill="blue", width=3)
+
+        # 라벨 추가
+        font = _get_font(14)
+        drw.text((X(v3 // 2), Y(v2 // 2)), "세면부", fill="darkblue", font=font)
+        drw.text((X(v3 + v5 // 2), Y(v6 // 2)), "샤워부", fill="darkblue", font=font)
+
+    return img
+
+
+# =========================================
+# 배치행렬 스케치(셀 좌표)
+# =========================================
+def matrix_layout_coords(col_widths_mm: List[int], row_heights_mm: List[int]):
+    cols = len(col_widths_mm)
+    rows = len(row_heights_mm)
+    x_edges = [0]
+    for w in col_widths_mm:
+        x_edges.append(x_edges[-1] + int(w))
+    y_edges = [0]
+    for h in row_heights_mm:
+        y_edges.append(y_edges[-1] + int(h))
+
+    cells = []
+    for r in range(rows):  # r=0 아래행
+        for c in range(cols):
+            x0 = x_edges[c]
+            x1 = x_edges[c + 1]
+            y0 = y_edges[r]
+            y1 = y_edges[r + 1]
+            cells.append(
+                {
+                    "row": r + 1,
+                    "col": c + 1,
+                    "x0_mm": x0,
+                    "y0_mm": y0,  # bottom-left
+                    "x1_mm": x1,
+                    "y1_mm": y1,  # top-right
+                    "w_mm": x1 - x0,
+                    "h_mm": y1 - y0,
+                }
+            )
+    return cells, (x_edges[-1], y_edges[-1])
+
+
+def draw_matrix_sketch(
+    col_widths_mm: List[int],
+    row_heights_mm: List[int],
+    cell_labels: Optional[Dict[Tuple[int, int], str]] = None,
+    scale: float = 0.2,
+    margin_px: int = 20,
+) -> Image.Image:
+    cells, (Wmm, Lmm) = matrix_layout_coords(col_widths_mm, row_heights_mm)
+    img_w = int(Wmm * scale) + margin_px * 2
+    img_h = int(Lmm * scale) + margin_px * 2
+    img = Image.new("RGB", (max(600, img_w), max(360, img_h)), "white")
+    draw = ImageDraw.Draw(img)
+    x0 = margin_px
+    y0 = margin_px
+    x1 = x0 + int(Wmm * scale)
+    y1 = y0 + int(Lmm * scale)
+    draw.rectangle([x0, y0, x1, y1], outline="black", width=3)
+
+    font = _get_font(11)
+
+    for cell in cells:
+        cx0 = x0 + int(cell["x0_mm"] * scale)
+        cx1 = x0 + int(cell["x1_mm"] * scale)
+        cy1 = y1 - int(cell["y0_mm"] * scale)
+        cy0 = y1 - int(cell["y1_mm"] * scale)
+        draw.rectangle([cx0, cy0, cx1, cy1], outline="#666666", width=2)
+        label = (
+            cell_labels.get((cell["row"], cell["col"]), "")
+            if cell_labels
+            else f"R{cell['row']}-C{cell['col']}"
+        )
+        tx = (cx0 + cx1) // 2 - 32
+        ty = (cy0 + cy1) // 2 - 10
+
+        # 멀티라인 텍스트 처리
+        lines = label.split("\n")
+        for i, line in enumerate(lines):
+            draw.text((tx, ty + i * 14), line, fill="black", font=font)
+
+    return img
+
+
+# =========================================
+# UI 시작
+# =========================================
+st.title("천장판 계산 프로그램 (UI + 엔진 통합)")
+
+# -------- 카탈로그 업로드 --------
+with st.sidebar:
+    st.header("① 천장판 데이터 로딩")
+    up = st.file_uploader("엑셀 업로드 (시트명: '천장판')", type=["xlsx"])
+    material = st.selectbox("재질", ["GRP", "FRP", "기타"], index=0)
+    st.caption("미업로드 시 기본 카탈로그 사용")
+
+if up:
+    try:
+        xls = pd.ExcelFile(up)
+        df_cat = pd.read_excel(xls, sheet_name="천장판")
+        BODY, SIDE, HATCH = load_catalog_from_excel(df_cat)
+        st.success(
+            f"카탈로그 로드 완료 — BODY {len(BODY)}종, SIDE {len(SIDE)}종, 점검구 {len(HATCH)}종"
+        )
     except Exception as e:
         st.error(f"엑셀 파싱 실패: {e}")
-        st.stop()
+        BODY, SIDE, HATCH = DEFAULT_BODY, DEFAULT_SIDE, DEFAULT_HATCH
 else:
-    if use_sample:
-        df_check, df_body_raw, df_side_raw = sample_catalog()
-    else:
-        st.info("엑셀을 업로드하거나 '샘플 DB 사용'을 체크하세요.")
-        st.stop()
+    BODY, SIDE, HATCH = DEFAULT_BODY, DEFAULT_SIDE, DEFAULT_HATCH
 
-# 미리보기
-with st.expander("카탈로그 미리보기", expanded=False):
-    st.write("점검구")
-    st.dataframe(df_check, use_container_width=True)
-    st.write("바디판넬")
-    st.dataframe(df_body_raw, use_container_width=True)
-    st.write("사이드판넬")
-    st.dataframe(df_side_raw, use_container_width=True)
+# 카탈로그 확인 UI (Expander)
+with st.expander("📋 카탈로그 확인 (업로드 데이터)", expanded=False):
+    st.markdown("### 점검구 카탈로그")
+    df_check_display = pd.DataFrame(
+        [{"이름": h.name, "폭": h.w, "길이": h.l, "가격": h.price} for h in HATCH]
+    )
+    st.dataframe(df_check_display, use_container_width=True)
+    st.caption(f"총 {len(HATCH)}개 항목")
 
-# ===================== 사각형 =====================
-if mode == "사각형":
-    st.subheader("사각형 입력")
-    c1, c2 = st.columns(2)
+    st.markdown("### 바디판넬 카탈로그")
+    df_body_display = pd.DataFrame(
+        [{"이름": b.name, "폭": b.w, "길이": b.l, "가격": b.price} for b in BODY]
+    )
+    st.dataframe(df_body_display, use_container_width=True)
+    st.caption(f"총 {len(BODY)}개 항목")
+
+    st.markdown("### 사이드판넬 카탈로그")
+    df_side_display = pd.DataFrame(
+        [{"이름": s.name, "폭": s.w, "길이": s.l, "가격": s.price} for s in SIDE]
+    )
+    st.dataframe(df_side_display, use_container_width=True)
+    st.caption(f"총 {len(SIDE)}개 항목")
+
+    # 통계 요약
+    st.markdown("---")
+    st.markdown("#### 📊 카탈로그 통계")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("점검구", f"{len(HATCH)}종")
+    with col2:
+        st.metric("바디판넬", f"{len(BODY)}종")
+    with col3:
+        st.metric("사이드판넬", f"{len(SIDE)}종")
+
+# -------- 입력 ----------
+st.header("② 사용자 입력")
+bath_type = st.radio("욕실유형", ["사각형 욕실", "코너형 욕실"], horizontal=True)
+st.markdown(
+    "> 설치공간 보정: 사각 W′=W+100, L′=L+100 / 코너 (세면: 폭=2+100, 길이=(1−5)+100), (샤워: 폭=6+100, 길이=5+50)"
+)
+
+calc_btn = None
+if bath_type == "사각형 욕실":
+    c1, c2, c3 = st.columns(3)
     with c1:
-        W = st.number_input(
-            "욕실 폭 W (mm, ≤ 1900)", min_value=200, max_value=1900, value=1350, step=10
-        )
+        W = st.number_input("가로 W (mm)", min_value=500, value=2000, step=50)
     with c2:
-        L = st.number_input(
-            "욕실 길이 L (mm, L ≥ W)", min_value=int(W), value=2040, step=10
+        L = st.number_input("세로 L (mm)", min_value=500, value=1600, step=50)
+    with c3:
+        split_on = st.radio("세면/샤워 경계선", ["없음", "있음"], horizontal=True)
+    split = None
+    if split_on == "있음":
+        split = st.slider(
+            "경계선 X (mm, 가로 기준)",
+            min_value=100,
+            max_value=int(W),
+            step=50,
+            value=min(900, int(W)),
         )
 
-    Wc, Lc = int(W + 100), int(L + 100)
-    st.caption(f"보정치수: Wc = {Wc} mm,  Lc = {Lc} mm  (사방 50mm 여유 포함)")
+    # 평면도
+    st.subheader("도면 미리보기 — 사각")
+    st.image(draw_rect_plan(W, L, split), use_container_width=False)
 
-    res = optimize_rect(
-        W, L, df_check, df_body_raw, df_side_raw, int(cut_cost), mgmt_ratio_pct
+    # 계산 옵션
+    opt_col = st.columns(3)
+    with opt_col[0]:
+        side_bojo = st.checkbox("2판 모드: 사이드 보조 커버 허용", value=True)
+    with opt_col[1]:
+        mode_force = st.selectbox(
+            "가로 모드", ["최소단가 자동(2/3/4)", "2", "3", "4"], index=0
+        )
+    with opt_col[2]:
+        hatch_model = st.selectbox(
+            "점검구(선택)", ["없음"] + [h.name for h in HATCH], index=0
+        )
+
+    calc_btn = st.button("계산 실행", type="primary")
+
+else:
+    colA, colB = st.columns(2)
+    with colA:
+        v3 = st.number_input("3번 변 (mm)", min_value=100, value=800, step=50)
+        v5 = st.number_input(
+            "5번 변 (오목 가로, mm)", min_value=100, value=900, step=50
+        )
+        v1 = int(v3 + v5)
+        st.text_input("1번 = 3+5", value=str(v1), disabled=True)
+    with colB:
+        v4 = st.number_input(
+            "4번 변 (오목 세로, mm)", min_value=100, value=600, step=50
+        )
+        v6 = st.number_input("6번 변 (mm)", min_value=100, value=900, step=50)
+        v2 = int(v4 + v6)
+        st.text_input("2번 = 4+6", value=str(v2), disabled=True)
+
+    st.subheader("도면 미리보기 — 코너")
+    st.image(
+        draw_corner_plan(v1, v2, v3, v4, v5, v6, split_on=True),
+        use_container_width=False,
     )
-    if res["status"] == "error":
-        st.error(res["message"])
-        st.stop()
-    if res["status"] == "no_solution":
-        st.warning(res["message"])
-        render_rect_with_panels(Wc, Lc, None, title="사각형(보정치수)")
-        st.stop()
 
-    # 도형 렌더: 최선안 오버레이
-    best_detail: Candidate = res["detail_best"]
-    render_rect_with_panels(
-        Wc, Lc, best_detail, title="사각형(보정치수 + 최적 조합 윤곽)"
-    )
-
-    st.subheader("최적 조합 (최소 총비용)")
-    best = res["best"]
-    cols = st.columns(3)
-    with cols[0]:
-        st.write(f"**패턴**: {best['패턴']}")
-        st.write(f"**패널명**: {best['패널명']}")
-        st.write(f"**배치치수**: {best['배치치수(cw×cl)']}")
-        st.write(f"**회전**: {best['회전']}")
-    with cols[1]:
+    opt_col = st.columns(3)
+    with opt_col[0]:
+        side_bojo = st.checkbox("2판 모드: 사이드 보조 커버 허용", value=True)
+    with opt_col[1]:
+        hatch_model = st.selectbox(
+            "점검구(선택)", ["없음"] + [h.name for h in HATCH], index=0
+        )
+    with opt_col[2]:
         st.write(
-            f"**폭컷**: {best['폭컷']}  |  **마지막 길이컷**: {best['마지막 길이컷']}"
+            "세로 적층: 항상 아래 방향, 1행 회전 금지, 2행부터 SIDE-900b 회전 절감 조건 적용"
         )
-        st.write(f"**총컷수**: {best['총컷수']}")
-        st.write(f"**자재비**: {best['자재비']:,}원")
-        st.write(f"**절단비**: {best['절단비']:,}원")
-        st.write(f"**총비용(자재+절단)**: {best['총비용']:,}원")
-    with cols[2]:
-        chk_each = res["check_price_each"]
-        chk_double = res["check_double"]
-        chk_txt = f"{chk_each:,}원" + (" ×2" if chk_double else "")
-        st.write(f"**점검구(바디와 동일 모델)**: {chk_txt}")
-        st.success(f"**관리비 포함 합계**: {res['mgmt_total']:,}원")
-    # ====== 자동저장: 천장 결과를 session_state에 기록 ======
+
+    calc_btn = st.button("계산 실행", type="primary")
+
+# =========================================
+# 계산 실행
+# =========================================
+if calc_btn:
     try:
-        st.session_state[CEIL_RESULT_KEY] = {
-            "section": "ceil",
-            "inputs": {
-                "mode": mode,
-                "W": int(W), "L": int(L),
-                "Wc": int(Wc), "Lc": int(Lc),
-                "cut_cost": int(cut_cost),
-                "mgmt_ratio_pct": float(mgmt_ratio_pct),
-            },
-            "result": {
-                "status": res.get("status"),
-                "message": res.get("message"),
-                "best": res.get("best", {}),
-                "detail_best": (candidate_to_dict(res["detail_best"]) if "detail_best" in res else {}),
-                "summary": res.get("summary", {}),
-            },
+        if bath_type == "사각형 욕실":
+            if split is None:
+                split = max(100, W // 2)  # 경계 없으면 임시 중앙 분할 유도
+
+            # 모드별 탐색
+            if mode_force == "최소단가 자동(2/3/4)":
+                mode, pc = search_min_cost_rect_global(
+                    BODY, SIDE, W, L, split, enable_side_bojo=side_bojo
+                )
+            else:
+                mode = mode_force
+                pc = search_min_cost_rect(
+                    BODY, SIDE, W, L, split, mode=mode, enable_side_bojo=side_bojo
+                )
+
+            Wp, Lp = install_space_rect(W, L)
+            meta = {
+                "유형": "사각",
+                "입력치수": f"W={W}, L={L}, split={split}",
+                "설치공간": f"W′={Wp}, L′={Lp}",
+                "선택모드": mode,
+            }
+        else:
+            pc = search_min_cost_corner_joint(
+                BODY, SIDE, v1, v2, v3, v4, v5, v6, allow_side_bojo=side_bojo
+            )
+            (sw, sl), (ww, wl) = install_spaces_corner(v1, v2, v3, v4, v5, v6)
+            meta = {
+                "유형": "코너",
+                "입력치수": f"1={v1},2={v2},3={v3},4={v4},5={v5},6={v6}",
+                "설치공간": f"세면 {sw}×{sl}, 샤워 {ww}×{wl}(세로목표 {sl})",
+                "선택모드": "2(조인트)",
+            }
+
+        # 요약/요소표
+        df_summary, df_elements, json_parts = summarize_solution(pc, meta)
+
+        # -------- 배치행렬 스케치 --------
+        col_widths = json_parts.get("col_widths", [])
+        row_lengths = json_parts.get("row_lengths", [])
+        cell_labels = {}
+        if not df_elements.empty and col_widths and row_lengths:
+            # 요소 테이블 기반 라벨: R행-C열\n모델명
+            cols_n = len(col_widths)
+            for i, row in df_elements.iterrows():
+                r = int(row["행"])
+                c = int(row["열"])
+                label = f"R{r}-C{c}\n{row['model']}"
+                cell_labels[(r, c)] = label
+            sketch = draw_matrix_sketch(
+                col_widths, row_lengths, cell_labels=cell_labels, scale=0.22
+            )
+            st.subheader("배치행렬 스케치")
+            st.image(
+                sketch,
+                caption=f"행렬 {len(row_lengths)}×{len(col_widths)}",
+                use_container_width=False,
+            )
+
+        # -------- 표(요약/상세) --------
+        st.subheader("요약")
+        st.dataframe(df_summary, use_container_width=True)
+
+        st.subheader("요소(셀별 패널/절단/비용)")
+        st.dataframe(df_elements, use_container_width=True)
+
+        # -------- 크기별/종류별 집계표 --------
+        if not df_elements.empty:
+            g_kind = (
+                df_elements.assign(
+                    dim=lambda d: d["panel_w"].astype(int).astype(str)
+                    + "x"
+                    + d["panel_l"].astype(int).astype(str)
+                )
+                .groupby(["kind", "dim"])
+                .size()
+                .reset_index(name="개수")
+                .rename(columns={"dim": "치수"})
+            )
+
+            st.subheader("종류·규격별 개수")
+            st.dataframe(g_kind, use_container_width=True)
+
+        # -------- 점검구 선택 반영 --------
+        hatch_count = 0
+        hatch_price = 0
+        hatch_name = None
+        if hatch_model and hatch_model != "없음":
+            sel = next((h for h in HATCH if h.name == hatch_model), None)
+            if sel:
+                hatch_count = 1
+                hatch_price = sel.price
+                hatch_name = sel.name
+                st.info(
+                    f"점검구 선택: {hatch_name} ({sel.w}x{sel.l}) — {sel.price:,}원"
+                )
+
+        # -------- JSON 내보내기 --------
+        body_models = Counter([r.panel.name for r in pc.rows if r.kind == "BODY"])
+        side_models = Counter([r.panel.name for r in pc.rows if r.kind == "SIDE"])
+        body_top = (None, 0)
+        side_top = (None, 0)
+        if body_models:
+            body_top = max(body_models.items(), key=lambda x: x[1])
+        if side_models:
+            side_top = max(side_models.items(), key=lambda x: x[1])
+
+        export_json = {
+            "재질": material,
+            "바디판넬": {"종류": body_top[0] or "", "개수": int(body_top[1])},
+            "사이드판넬": {"종류": side_top[0] or "", "개수": int(side_top[1])},
+            "총개수": int(df_summary.at[0, "총판넬수"]) if not df_summary.empty else 0,
+            "점검구": int(hatch_count),
+            "단가": (
+                int(df_summary.at[0, "총단가합계"]) + int(hatch_price)
+                if not df_summary.empty
+                else 0
+            ),
         }
-        st.session_state[CEIL_DONE_KEY] = True
-        st.success("천장 결과 자동저장 완료")
-    except Exception as _e:
-        st.warning(f"천장 결과 자동저장 중 오류: {_e}")
+        st.subheader("JSON 미리보기")
+        st.code(json.dumps(export_json, ensure_ascii=False, indent=2), language="json")
 
-
-    st.subheader("상위 후보 (총비용 오름차순)")
-    st.dataframe(pd.DataFrame(res["top"]), use_container_width=True)
-
-# ===================== 코너형 =====================
-else:
-    st.subheader("코너형 입력 (원치수)")
-    c1, c2 = st.columns(2)
-    with c1:
-        S_W = st.number_input("세면부 폭 S_W (mm)", min_value=400, value=1600, step=10)
-        S_L = st.number_input(
-            "세면부 길이 S_L (mm)", min_value=300, value=1300, step=10
+        # 다운로드 버튼
+        buf = io.BytesIO(
+            json.dumps(export_json, ensure_ascii=False, indent=2).encode("utf-8")
         )
-    with c2:
-        H_W = st.number_input("샤워부 폭 H_W (mm)", min_value=300, value=1200, step=10)
-        H_L = st.number_input("샤워부 길이 H_L (mm)", min_value=300, value=700, step=10)
+        st.download_button(
+            "JSON 다운로드",
+            data=buf,
+            file_name="ceiling_panels_order.json",
+            mime="application/json",
+        )
 
-    S_Wc, S_Lc = int(S_W + 100), int(S_L + 100)
-    H_Wc, H_Lc = int(H_W + 100), int(H_L + 0)
-    st.caption(
-        f"보정치수: 세면부(S) Wc={S_Wc}, Lc={S_Lc} / 샤워부(H) Wc={H_Wc}, Lc={H_Lc}"
-    )
+        # ====== Session State 자동저장 ======
+        try:
+            st.session_state[CEIL_RESULT_KEY] = {
+                "section": "ceil",
+                "inputs": {
+                    "bath_type": bath_type,
+                    "material": material,
+                    **meta,
+                },
+                "result": {
+                    "pattern_cost": {
+                        "pattern": pc.pattern,
+                        "total_cost": pc.total_cost,
+                        "fail_reason": pc.fail_reason,
+                        "row_lengths": pc.row_lengths,
+                    },
+                    "summary": (
+                        df_summary.to_dict("records")[0] if not df_summary.empty else {}
+                    ),
+                    "elements": (
+                        df_elements.to_dict("records") if not df_elements.empty else []
+                    ),
+                    "json_export": export_json,
+                },
+            }
+            st.session_state[CEIL_DONE_KEY] = True
 
-    # 넘버링 도형
-    render_corner_numbered(S_W, S_L, H_W, H_L, title="코너형(1~6 변 + 길이)")
+            # JSON 파일 자동 저장 (exports 폴더)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            json_filename = f"ceil_{timestamp}.json"
+            json_path = os.path.join(EXPORT_DIR, json_filename)
+            _save_json(json_path, st.session_state[CEIL_RESULT_KEY])
 
-    res = optimize_corner(
-        S_W,
-        S_L,
-        H_W,
-        H_L,
-        df_check,
-        df_body_raw,
-        df_side_raw,
-        int(cut_cost),
-        mgmt_ratio_pct,
-    )
-    if res["status"] == "error":
-        st.error(res["message"])
-        st.stop()
-    if res["status"] == "no_solution":
-        st.warning(res["message"])
-        st.stop()
+            st.success(f"✅ 천장 결과 자동저장 완료 (Session State + {json_filename})")
+        except Exception as save_err:
+            st.warning(f"⚠️ 자동저장 중 오류: {save_err}")
 
-    st.subheader("영역별 최적 조합")
-    st.dataframe(pd.DataFrame([res["sink"], res["shower"]]), use_container_width=True)
+    except Exception as e:
+        st.error(f"계산 실패: {e}")
+        import traceback
 
-    cols = st.columns(3)
-    with cols[0]:
-        st.write(f"**자재비 합**: {res['sum_material']:,}원")
-        st.write(f"**절단비 합**: {res['sum_cut_cost']:,}원")
-        st.write(f"**총비용(자재+절단)**: {res['sum_total_cost']:,}원")
-    with cols[1]:
-        chk_each = res["check_price_each"]
-        chk_double = res["check_double"]
-        chk_txt = f"{chk_each:,}원" + (" ×2" if chk_double else "")
-        st.write(f"**점검구(바디와 동일 모델)**: {chk_txt}")
-    with cols[2]:
-        st.success(f"**관리비 포함 합계**: {res['mgmt_total']:,}원")
-    # ====== 자동저장: 천장 결과를 session_state에 기록 ======
-    try:
-        st.session_state[CEIL_RESULT_KEY] = {
-            "section": "ceil",
-            "inputs": {
-                "mode": mode,  # "코너형(L자)"
-                "S_W": int(S_W), "S_L": int(S_L),
-                "H_W": int(H_W), "H_L": int(H_L),
-                "S_Wc": int(S_Wc), "S_Lc": int(S_Lc),
-                "H_Wc": int(H_Wc), "H_Lc": int(H_Lc),
-                "cut_cost": int(cut_cost),
-                "mgmt_ratio_pct": float(mgmt_ratio_pct),
-            },
-            "result": {
-                "status": res.get("status"),
-                "message": res.get("message"),
-                "sink": res.get("sink", {}),       # 세면부 최적안
-                "shower": res.get("shower", {}),   # 샤워부 최적안
-                "sum_material": res.get("sum_material"),
-                "sum_cut_cost": res.get("sum_cut_cost"),
-                "sum_total_cost": res.get("sum_total_cost"),
-                "check_price_each": res.get("check_price_each"),
-                "check_double": res.get("check_double"),
-                "subtotal": res.get("subtotal"),
-                "mgmt_total": res.get("mgmt_total"),
-            },
-        }
-        st.session_state[CEIL_DONE_KEY] = True
-        st.success("천장 결과 자동저장 완료")
-    except Exception as _e:
-        st.warning(f"천장 결과 자동저장 중 오류: {_e}")
+        st.code(traceback.format_exc())

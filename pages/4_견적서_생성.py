@@ -169,29 +169,62 @@ def convert_ceiling_data(ceil_result: dict) -> dict:
     if not ceil_result:
         return {}
 
+    # ceil_panel_final.py의 session_state 구조에 맞춰 파싱
+    inputs = ceil_result.get("inputs", {})
     result = ceil_result.get("result", {})
-    detail_best = result.get("detail_best", {})
-    oriented = detail_best.get("oriented", [])
 
-    # 바디판넬과 사이드판넬 분리
-    body_panels = [p for p in oriented if p.get("kind") == "B"]
-    side_panels = [p for p in oriented if p.get("kind") == "S"]
+    # 재질 정보 추출 (inputs에서)
+    material = inputs.get("material", "GRP")  # GRP/FRP/기타
+
+    # JSON export 데이터 사용 (이미 변환된 포맷)
+    json_export = result.get("json_export", {})
+    if json_export:
+        return {
+            "재질": json_export.get("재질", material),
+            "총개수": json_export.get("총개수", 0),
+            "바디판넬": json_export.get("바디판넬", {}),
+            "사이드판넬": json_export.get("사이드판넬", {}),
+            "천공구": json_export.get("점검구", 1),
+            "단가": json_export.get("단가", 0),
+        }
+
+    # Fallback: summary 데이터에서 추출
+    summary = result.get("summary", {})
+    elements = result.get("elements", [])
+
+    # 바디/사이드 개수 카운트
+    body_cnt = sum(1 for e in elements if e.get("kind") == "BODY")
+    side_cnt = sum(1 for e in elements if e.get("kind") == "SIDE")
+
+    # 대표 모델명 추출
+    body_models = [e.get("model", "") for e in elements if e.get("kind") == "BODY"]
+    side_models = [e.get("model", "") for e in elements if e.get("kind") == "SIDE"]
 
     body_info = {}
-    if body_panels:
-        body_info = {"개수": len(body_panels), "종류": body_panels[0].get("name", "")}
+    if body_models:
+        # 가장 많이 나온 모델
+        from collections import Counter
+        body_top = Counter(body_models).most_common(1)
+        if body_top:
+            body_info = {"종류": body_top[0][0].replace("(rot)", ""), "개수": body_cnt}
 
     side_info = {}
-    if side_panels:
-        side_info = {"개수": len(side_panels), "종류": side_panels[0].get("name", "")}
+    if side_models:
+        from collections import Counter
+        side_top = Counter(side_models).most_common(1)
+        if side_top:
+            side_info = {"종류": side_top[0][0].replace("(rot)", ""), "개수": side_cnt}
+
+    total_cnt = summary.get("총판넬수", body_cnt + side_cnt)
+    total_price = summary.get("총단가합계", 0)
 
     return {
-        "재질": "ABS",  # 기본값, 실제로는 panel 종류에서 판단해야 함
-        "총개수": len(oriented),
+        "재질": material,
+        "총개수": int(total_cnt),
         "바디판넬": body_info,
         "사이드판넬": side_info,
-        "천공구": 1,  # 기본값
-        "단가": detail_best.get("material_cost", 0) / max(len(oriented), 1),
+        "천공구": 1,  # 기본값, json_export 없으면 1로 가정
+        "단가": int(total_price),
     }
 
 

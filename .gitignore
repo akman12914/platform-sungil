@@ -1,8 +1,54 @@
+# Environment Variables
 .env
-.venv
-.vscode
+.env.local
+.env.*.local
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python Cache
 __pycache__/
-docs
-exports
+*.py[cod]
+*$py.class
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project Specific
+docs/
+exports/
 CLAUDE.md
 
+# User Data
+users.json
+
+# Temporary Files
+*.tmp
+*.bak
+*.log
+temp/
+tmp/
+
+# Excel/Office Temp Files
+~$*.xlsx
+~$*.xls
+~$*.docx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# FAISS Index
+faiss_index/
+*.index

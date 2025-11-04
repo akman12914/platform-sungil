@@ -555,10 +555,9 @@ def build_faces_for_wall(
     j_lower_segments: Optional[
         List[int]
     ] = None,  # 단차 분할 폭 리스트 (사각형 3개, 코너형 2개)
-    j_contact_walls: Optional[List[int]] = None,  # 접벽(최대 2개)
 ) -> List[FaceSpec]:
     """
-    한 '벽'을 문/젠다이/접벽 설정에 따라 여러 FaceSpec으로 분해한다.
+    한 '벽'을 문/젠다이 설정에 따라 여러 FaceSpec으로 분해한다.
     """
     wl = wall_label(shape, wall_id)
     faces: List[FaceSpec] = []
@@ -601,54 +600,6 @@ def build_faces_for_wall(
                     R,
                     height_mm,
                     "door-right",
-                )
-            )
-        return faces
-
-    # 1) 접벽 분할(설치공간: 오버레이만, 면 제외)
-    if (
-        j_enabled
-        and j_contact_walls
-        and (wall_id in j_contact_walls)
-        and (j_depth > 0)
-        and (j_h > 0)
-    ):
-        fi = 1
-        depth = min(int(j_depth), int(width_mm))
-        jh = min(int(j_h), int(height_mm))
-        top_h = max(0, int(height_mm) - jh)
-        if depth > 0 and top_h > 0:
-            faces.append(
-                FaceSpec(
-                    wall_id,
-                    wl,
-                    fi,
-                    f"{wl}F{fi}",
-                    0,
-                    depth,
-                    jh,
-                    int(height_mm),
-                    depth,
-                    top_h,
-                    "adj-1",
-                )
-            )
-            fi += 1
-        rem_w = max(0, int(width_mm) - depth)
-        if rem_w > 0:
-            faces.append(
-                FaceSpec(
-                    wall_id,
-                    wl,
-                    fi,
-                    f"{wl}F{fi}",
-                    depth,
-                    int(width_mm),
-                    0,
-                    int(height_mm),
-                    rem_w,
-                    int(height_mm),
-                    "adj-2",
                 )
             )
         return faces
@@ -967,25 +918,6 @@ def draw_corner_preview(
     return img
 
 
-def jendai_overlays_for_wall(
-    wall_id: int,
-    width_mm: int,
-    height_mm: int,
-    j_enabled: bool,
-    j_depth: int,
-    j_h: int,
-    j_contact_walls: Optional[List[int]],
-) -> List[Tuple[int, int, int, int]]:
-    """접벽이면 젠다이 설치공간(검정 칠) 오버레이: (x0,x1,y0,y1) in mm"""
-    if not (j_enabled and j_contact_walls and (wall_id in j_contact_walls)):
-        return []
-    depth = max(0, min(int(j_depth), int(width_mm)))
-    jh = max(0, min(int(j_h), int(height_mm)))
-    if depth == 0 or jh == 0:
-        return []
-    return [(0, depth, 0, jh)]
-
-
 # ### NEW: JENDAI SIDE UTIL
 def compute_jendai_side_panels(shape: str, j_enabled: bool, j_has_step: bool,
                                j_depth: int, j_h: int):
@@ -1071,7 +1003,6 @@ def collect_all_faces(
     j_h: int,
     j_depth: int,
     j_lower_segments_map: Dict[int, List[int]],
-    j_contact_walls: List[int],
 ) -> List[FaceSpec]:
     all_faces: List[FaceSpec] = []
     for wid, Wk in widths.items():
@@ -1095,7 +1026,6 @@ def collect_all_faces(
             j_h=int(j_h),
             j_depth=int(j_depth),
             j_lower_segments=j_lower_segments_map.get(int(wid), None),
-            j_contact_walls=j_contact_walls,
         )
         all_faces.extend(faces)
     return all_faces
@@ -1217,6 +1147,9 @@ if not floor_done or not floor_result:
 # 바닥판 완료 시 성공 메시지
 st.success("✅ 바닥판 계산이 완료되었습니다. 벽판 계산을 진행할 수 있습니다.")
 
+# 벽판 단가 설정 (기본값 30,000원)
+WALL_UNIT_PRICE = 30000
+
 with st.sidebar:
     st.header("기본 입력")
     shape = st.radio("욕실형태", ["사각형", "코너형"], horizontal=True)
@@ -1253,7 +1186,6 @@ with st.sidebar:
     j_h = 1000
     j_depth = 0
     j_lower_segments_map: Dict[int, List[int]] = {}
-    j_contact_walls: List[int] = []
 
     if j_enabled:
         j_wall = st.number_input(
@@ -1294,18 +1226,10 @@ with st.sidebar:
                 )
                 j_lower_segments_map[int(j_wall)] = [int(w1), int(w2)]
 
-        st.markdown("**젠다이 접벽(옆벽) 지정** — 젠다이와 맞닿는 옆벽(최대 2개)")
-        candidates = list(range(1, 5)) if shape == "사각형" else list(range(1, 7))
-        j_contact_walls = st.multiselect(
-            "접벽 벽 번호 선택",
-            options=candidates,
-            default=[],
-            max_selections=2,
-            help="선택된 벽은 폭=깊이, 높이=(벽높이-젠다이높이) 면과 나머지 면으로 분할됩니다. 설치공간은 검정 오버레이로만 표시됩니다.",
-        )
-        if j_contact_walls and (int(j_wall) in j_contact_walls):
-            st.error("젠다이 벽과 접벽을 동일 벽으로 지정할 수 없습니다.")
-            j_contact_walls = [w for w in j_contact_walls if w != int(j_wall)]
+    st.divider()
+    st.subheader("비용 비율(%)")
+    rp = st.number_input("생산관리비율 rₚ (%)", min_value=0.0, max_value=50.0, value=10.0, step=0.5)
+    rs = st.number_input("영업관리비율 rₛ (%)", min_value=0.0, max_value=50.0, value=5.0, step=0.5)
 
     st.divider()
     calc = st.button("계산 & 미리보기", type="primary")
@@ -1400,27 +1324,16 @@ if shape == "사각형":
                     j_h=int(j_h),
                     j_depth=int(j_depth),
                     j_lower_segments_map=j_lower_segments_map,
-                    j_contact_walls=j_contact_walls,
                 )
                 faces = [f for f in faces if f.wall_id == wid]
                 all_faces.extend(faces)
 
-                overlays = jendai_overlays_for_wall(
-                    wall_id=wid,
-                    width_mm=Wk,
-                    height_mm=int(H_eff),
-                    j_enabled=j_enabled,
-                    j_depth=int(j_depth),
-                    j_h=int(j_h),
-                    j_contact_walls=j_contact_walls,
-                )
                 img = draw_wall_elevation_with_faces(
                     wall_label("사각형", wid),
                     Wk,
                     int(H_eff),
                     faces,
                     target_h_px=280,
-                    overlays=overlays,
                 )
                 with cols[i % 2]:
                     is_jendai_wall = (j_enabled and j_has_step and (j_wall is not None) and (int(j_wall) == int(wid)))
@@ -1487,6 +1400,90 @@ if shape == "사각형":
                 st.dataframe(order, width="stretch")
                 st.markdown(f"**총 벽판 개수:** {len(df)} 장")
 
+                # ====== 비용 계산 ======
+                panel_count = len(df)
+                subtotal = panel_count * WALL_UNIT_PRICE
+                r_p = rp / 100.0
+                r_s = rs / 100.0
+
+                if r_p < 1.0:
+                    prod_included = subtotal / (1 - r_p)
+                else:
+                    prod_included = subtotal
+                prod_cost = prod_included - subtotal
+
+                if r_s < 1.0:
+                    sales_included = prod_included / (1 - r_s)
+                else:
+                    sales_included = prod_included
+                sales_cost = sales_included - prod_included
+
+                st.divider()
+                st.subheader("💰 비용 계산")
+                st.markdown(f"""
+- **패널 수량:** {panel_count} 장
+- **단가:** {WALL_UNIT_PRICE:,}원
+- **소계 (panels only):** {int(subtotal):,}원
+- **생산관리비 ({rp}%):** {int(prod_cost):,}원
+- **영업관리비 ({rs}%):** {int(sales_cost):,}원
+- **최종 금액:** {int(sales_included):,}원
+                """)
+
+                # ====== JSON 저장 및 다운로드 ======
+                final_cost_json = {
+                    "section": "wall",
+                    "shape": "사각형",
+                    "timestamp": datetime.now().isoformat(),
+                    "inputs": {
+                        "shape": shape,
+                        "split_kind": split_kind,
+                        "H": int(H),
+                        "H_eff": int(H_eff),
+                        "floor_type": floor_type,
+                        "tile": tile,
+                        "door_wall": int(door_wall) if "door_wall" in locals() else None,
+                        "door_s": float(door_s) if "door_s" in locals() else None,
+                        "door_d": float(door_d) if "door_d" in locals() else None,
+                        "j_enabled": bool(j_enabled),
+                        "j_wall": int(j_wall) if j_enabled and (j_wall is not None) else None,
+                        "j_has_step": bool(j_has_step),
+                        "j_h": int(j_h) if j_enabled else 0,
+                        "j_depth": int(j_depth) if j_enabled else 0,
+                        "rp": rp,
+                        "rs": rs,
+                    },
+                    "panels": rows,
+                    "errors": errs,
+                    "cost": {
+                        "panel_count": panel_count,
+                        "unit_price": WALL_UNIT_PRICE,
+                        "subtotal": int(subtotal),
+                        "prod_cost": int(prod_cost),
+                        "sales_cost": int(sales_cost),
+                        "total": int(sales_included),
+                        "rp_percent": rp,
+                        "rs_percent": rs,
+                    }
+                }
+
+                # 로컬 파일로 저장
+                json_path = os.path.join(EXPORT_DIR, "wall.json")
+                try:
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(final_cost_json, f, ensure_ascii=False, indent=2)
+                    st.success(f"✅ JSON 파일 저장 완료: {json_path}")
+                except Exception as e:
+                    st.error(f"JSON 파일 저장 실패: {e}")
+
+                # 다운로드 버튼
+                json_str = json.dumps(final_cost_json, ensure_ascii=False, indent=2)
+                st.download_button(
+                    label="📥 JSON 다운로드",
+                    data=json_str,
+                    file_name=f"wall_cost_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json"
+                )
+
             if errs:
                 st.warning("규칙 적용 실패/제약 위반 벽면")
                 df_err = pd.DataFrame(errs).rename(
@@ -1519,7 +1516,8 @@ if shape == "사각형":
                         "j_has_step": bool(j_has_step),
                         "j_h": (int(j_h) if j_enabled else 0),
                         "j_depth": (int(j_depth) if j_enabled else 0),
-                        "j_contact_walls": (j_contact_walls if j_enabled else []),
+                        "rp": rp,
+                        "rs": rs,
                     },
                     "result": {
                         "panels": rows,  # panels_for_faces_new_engine()에서 받아온 rows
@@ -1528,6 +1526,16 @@ if shape == "사각형":
                         "counts": {
                             "n_panels": len(rows),
                             "n_errors": len(errs),
+                        },
+                        "cost": {
+                            "panel_count": panel_count,
+                            "unit_price": WALL_UNIT_PRICE,
+                            "subtotal": int(subtotal),
+                            "prod_cost": int(prod_cost),
+                            "sales_cost": int(sales_cost),
+                            "total": int(sales_included),
+                            "rp_percent": rp,
+                            "rs_percent": rs,
                         },
                     },
                 }
@@ -1620,27 +1628,16 @@ else:
                     j_h=int(j_h),
                     j_depth=int(j_depth),
                     j_lower_segments_map=j_lower_segments_map,
-                    j_contact_walls=j_contact_walls,
                 )
                 faces = [f for f in faces if f.wall_id == wid]
                 all_faces.extend(faces)
 
-                overlays = jendai_overlays_for_wall(
-                    wall_id=wid,
-                    width_mm=Wk,
-                    height_mm=int(H_eff),
-                    j_enabled=j_enabled,
-                    j_depth=int(j_depth),
-                    j_h=int(j_h),
-                    j_contact_walls=j_contact_walls,
-                )
                 img = draw_wall_elevation_with_faces(
                     wall_label("코너형", wid),
                     Wk,
                     int(H_eff),
                     faces,
                     target_h_px=280,
-                    overlays=overlays,
                 )
                 with cols[i % 3]:
                     # ### FIX: JENDAI SIDE CAPTION (CORNER / dynamic Wn)
@@ -1708,6 +1705,96 @@ else:
                 st.dataframe(order, width="stretch")
                 st.markdown(f"**총 벽판 개수:** {len(df)} 장")
 
+                # ====== 비용 계산 ======
+                panel_count = len(df)
+                subtotal = panel_count * WALL_UNIT_PRICE
+                r_p = rp / 100.0
+                r_s = rs / 100.0
+
+                if r_p < 1.0:
+                    prod_included = subtotal / (1 - r_p)
+                else:
+                    prod_included = subtotal
+                prod_cost = prod_included - subtotal
+
+                if r_s < 1.0:
+                    sales_included = prod_included / (1 - r_s)
+                else:
+                    sales_included = prod_included
+                sales_cost = sales_included - prod_included
+
+                st.divider()
+                st.subheader("💰 비용 계산")
+                st.markdown(f"""
+- **패널 수량:** {panel_count} 장
+- **단가:** {WALL_UNIT_PRICE:,}원
+- **소계 (panels only):** {int(subtotal):,}원
+- **생산관리비 ({rp}%):** {int(prod_cost):,}원
+- **영업관리비 ({rs}%):** {int(sales_cost):,}원
+- **최종 금액:** {int(sales_included):,}원
+                """)
+
+                # ====== JSON 저장 및 다운로드 ======
+                final_cost_json = {
+                    "section": "wall",
+                    "shape": "코너형",
+                    "timestamp": datetime.now().isoformat(),
+                    "inputs": {
+                        "shape": shape,
+                        "split_kind": split_kind,
+                        "H": int(H),
+                        "H_eff": int(H_eff),
+                        "floor_type": floor_type,
+                        "tile": tile,
+                        "W1": int(W1),
+                        "W2": int(W2),
+                        "W3": int(W3),
+                        "W4": int(W4),
+                        "W5": int(W5),
+                        "W6": int(W6),
+                        "door_wall": int(door_wall) if "door_wall" in locals() else None,
+                        "door_s": float(door_s) if "door_s" in locals() else None,
+                        "door_d": float(door_d) if "door_d" in locals() else None,
+                        "j_enabled": bool(j_enabled),
+                        "j_wall": int(j_wall) if j_enabled and (j_wall is not None) else None,
+                        "j_has_step": bool(j_has_step),
+                        "j_h": int(j_h) if j_enabled else 0,
+                        "j_depth": int(j_depth) if j_enabled else 0,
+                        "rp": rp,
+                        "rs": rs,
+                    },
+                    "panels": rows,
+                    "errors": errs,
+                    "cost": {
+                        "panel_count": panel_count,
+                        "unit_price": WALL_UNIT_PRICE,
+                        "subtotal": int(subtotal),
+                        "prod_cost": int(prod_cost),
+                        "sales_cost": int(sales_cost),
+                        "total": int(sales_included),
+                        "rp_percent": rp,
+                        "rs_percent": rs,
+                    }
+                }
+
+                # 로컬 파일로 저장
+                json_path = os.path.join(EXPORT_DIR, "wall.json")
+                try:
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(final_cost_json, f, ensure_ascii=False, indent=2)
+                    st.success(f"✅ JSON 파일 저장 완료: {json_path}")
+                except Exception as e:
+                    st.error(f"JSON 파일 저장 실패: {e}")
+
+                # 다운로드 버튼
+                json_str = json.dumps(final_cost_json, ensure_ascii=False, indent=2)
+                st.download_button(
+                    label="📥 JSON 다운로드",
+                    data=json_str,
+                    file_name=f"wall_cost_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json"
+                )
+
             if errs:
                 st.warning("규칙 적용 실패/제약 위반 벽면")
                 st.dataframe(
@@ -1741,7 +1828,8 @@ else:
                         "j_has_step": bool(j_has_step),
                         "j_h": (int(j_h) if j_enabled else 0),
                         "j_depth": (int(j_depth) if j_enabled else 0),
-                        "j_contact_walls": (j_contact_walls if j_enabled else []),
+                        "rp": rp,
+                        "rs": rs,
                     },
                     "result": {
                         "panels": rows,  # panels_for_faces_new_engine()에서 받아온 rows
@@ -1750,6 +1838,16 @@ else:
                         "counts": {
                             "n_panels": len(rows),
                             "n_errors": len(errs),
+                        },
+                        "cost": {
+                            "panel_count": panel_count,
+                            "unit_price": WALL_UNIT_PRICE,
+                            "subtotal": int(subtotal),
+                            "prod_cost": int(prod_cost),
+                            "sales_cost": int(sales_cost),
+                            "total": int(sales_included),
+                            "rp_percent": rp,
+                            "rs_percent": rs,
                         },
                     },
                 }

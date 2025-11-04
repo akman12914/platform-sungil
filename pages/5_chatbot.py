@@ -125,7 +125,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 # ---------------------------------------
 # 환경설정

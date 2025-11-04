@@ -1,7 +1,7 @@
 # streamlit run app.py
 import io
 import os, glob, json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 # --- Common Styles ---
 from common_styles import apply_common_styles, set_page_config
@@ -122,12 +122,54 @@ def _get_font(size: int = 16) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+# ===== 시공비 시트에서 PVE 가공비 추출 =====
+def get_pve_process_cost(df_cost: pd.DataFrame) -> Optional[int]:
+    """
+    '시공비' 시트에서 항목=바닥판 이고 공정에 'PVE'가 포함된 행의 '시공비'를 반환.
+    없으면 None.
+    """
+    df = df_cost.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # 컬럼 매핑(유연 대응)
+    col_map = {}
+    for c in df.columns:
+        cs = str(c).strip()
+        if cs in ["항목", "Item"]:
+            col_map["항목"] = c
+        elif cs in ["공정", "공사", "Process"]:
+            col_map["공정"] = c
+        elif cs in ["시공비", "금액", "Cost"]:
+            col_map["시공비"] = c
+
+    if not {"항목","공정","시공비"}.issubset(col_map.keys()):
+        return None
+
+    def _clean_num(x):
+        if pd.isna(x): return None
+        s = str(x).replace(",", "").strip()
+        try: return int(float(s))
+        except: return None
+
+    df["__항목"] = df[col_map["항목"]].astype(str).str.strip()
+    df["__공정"] = df[col_map["공정"]].astype(str).str.strip()
+    df["__시공비"] = df[col_map["시공비"]].apply(_clean_num)
+
+    hit = df[
+        (df["__항목"] == "바닥판") &
+        (df["__공정"].str.contains("PVE", case=False, na=False))
+    ]
+
+    vals = hit["__시공비"].dropna()
+    return int(vals.iloc[0]) if not vals.empty else None
+
+
 # ---------------------------
 # UI: Sidebar (왼쪽 입력 인터페이스)
 # ---------------------------
 st.sidebar.header("입력값 (왼쪽 인터페이스)")
 uploaded = st.sidebar.file_uploader(
-    "엑셀 업로드 (시트명: 바닥판)", type=["xlsx", "xls"]
+    "엑셀 업로드 (필수 시트: '바닥판', '시공비')", type=["xlsx", "xls"]
 )
 
 units = st.sidebar.number_input("공사 세대수", min_value=1, step=1, value=100)
@@ -194,10 +236,14 @@ if (not disable_sink_shower) and (shw is not None) and (shl is not None):
             exception_applied = True
 
 st.sidebar.subheader("계산 옵션")
-mgmt_rate_pct = st.sidebar.number_input(
-    "생산관리비율 (%)", min_value=0.0, step=0.5, value=25.0
+prod_rate_pct = st.sidebar.number_input(
+    "생산관리비율 rₚ (%)", min_value=0.0, max_value=99.9, step=0.5, value=25.0
 )
-mgmt_rate = mgmt_rate_pct / 100.0
+sales_rate_pct = st.sidebar.number_input(
+    "영업관리비율 rₛ (%)", min_value=0.0, max_value=30.0, step=0.5, value=20.0
+)
+r_p = prod_rate_pct / 100.0
+r_s = sales_rate_pct / 100.0
 
 pve_kind = st.sidebar.radio(
     "PVE 유형", ["일반형 (+380mm)", "주거약자 (+480mm)"], index=0
@@ -284,27 +330,64 @@ def optional_eq_series(s: pd.Series, value: Optional[float]) -> pd.Series:
 
 
 # ---------------------------
+# 관리비 2단계 계산 (생산관리비 + 영업관리비)
+# ---------------------------
+def price_blocks_pve(subtotal: int, r_p: float, r_s: float) -> Dict[str, int]:
+    """PVE: 생산관리비 비포함(단순 곱), 영업관리비 포함역산."""
+    prod_fee = int(round(subtotal * r_p))
+    prod_incl = int(round(subtotal + prod_fee))
+    sales_fee = int(round(prod_incl / (1.0 - r_s) - prod_incl)) if r_s > 0 else 0
+    sales_incl = int(round(prod_incl + sales_fee))
+    return {
+        "생산관리비": prod_fee,
+        "생산관리비포함": prod_incl,
+        "영업관리비": sales_fee,
+        "영업관리비포함": sales_incl,
+    }
+
+
+def price_blocks_grp_frp(subtotal: int, r_p: float, r_s: float) -> Dict[str, int]:
+    """GRP/FRP: 생산관리비 포함역산, 영업관리비 포함역산."""
+    if r_p >= 1.0:
+        raise ZeroDivisionError("생산관리비율은 100% 미만이어야 합니다.")
+    prod_incl = int(round(subtotal / (1.0 - r_p))) if r_p > 0 else int(subtotal)
+    prod_fee = int(round(prod_incl - subtotal))
+    sales_fee = int(round(prod_incl / (1.0 - r_s) - prod_incl)) if r_s > 0 else 0
+    sales_incl = int(round(prod_incl + sales_fee))
+    return {
+        "생산관리비": prod_fee,
+        "생산관리비포함": prod_incl,
+        "영업관리비": sales_fee,
+        "영업관리비포함": sales_incl,
+    }
+
+
+# ---------------------------
 # PVE 계산
 # ---------------------------
 def pve_quote(
-    width_mm: int, length_mm: int, mgmt_rate: float, kind: str = "일반형"
+    width_mm: int,
+    length_mm: int,
+    r_p: float,
+    r_s: float,
+    pve_process_cost: Optional[int],
+    kind: str = "일반형",
 ) -> Dict[str, Any]:
+    """PVE 원가 산정 + 관리비 블록."""
     add = 380 if "일반" in kind else 480
     w_m = (width_mm + add) / 1000.0
     l_m = (length_mm + add) / 1000.0
     area = w_m * l_m
-    raw = round(area * 12000)  # 원재료비
-    process = 24331  # 가공비
-    subtotal = raw + process  # 소계
-    subtotal_mgmt = round(subtotal * (1.0 + mgmt_rate))
+    raw = int(round(area * 12000))  # ㎡당 12,000원
+    process = int(pve_process_cost) if pve_process_cost is not None else 24331
+    subtotal = raw + process
+    blocks = price_blocks_pve(subtotal, r_p, r_s)
     return {
         "소재": "PVE",
-        "원재료비": int(raw),
-        "가공비": int(process),
-        "소계": int(subtotal),
-        "관리비율": mgmt_rate,
-        "관리비포함소계": int(subtotal_mgmt),
-        "설명": f"PVE({kind}) 계산: (W+{add})*(L+{add}), 면적×12000 + 24331 후 관리비율 적용",
+        "원재료비": raw,
+        "가공비": process,
+        "소계": subtotal,
+        **blocks,
     }
 
 
@@ -658,18 +741,34 @@ st.title("바닥판 규격/옵션 산출")
 
 if not uploaded:
     st.info(
-        "왼쪽에서 엑셀 파일(시트명: **바닥판**)을 업로드한 뒤, **계산하기**를 눌러주세요."
+        "왼쪽에서 엑셀 파일(필수 시트: **바닥판**, **시공비**)을 업로드한 뒤, **계산하기**를 눌러주세요."
     )
     st.stop()
 
 # 엑셀 로딩
 try:
-    raw = pd.read_excel(uploaded, sheet_name="바닥판")
+    xls = pd.ExcelFile(uploaded)
 except Exception as e:
-    st.error(f"엑셀 로딩 오류: {e}")
+    st.error(f"엑셀 로딩 실패: {e}")
     st.stop()
 
-df = normalize_df(raw)
+missing_sheets = [s for s in ["바닥판", "시공비"] if s not in xls.sheet_names]
+if missing_sheets:
+    st.error(f"필수 시트 누락: {missing_sheets} — 엑셀을 확인하세요.")
+    st.stop()
+
+try:
+    raw = pd.read_excel(xls, sheet_name="바닥판")
+    df = normalize_df(raw)
+except Exception as e:
+    st.error(f"'바닥판' 시트 파싱 실패: {e}")
+    st.stop()
+
+try:
+    df_cost = pd.read_excel(xls, sheet_name="시공비")
+    pve_process_cost = get_pve_process_cost(df_cost)  # 못 찾으면 None
+except Exception:
+    pve_process_cost = None
 
 if do_calc:
     decision_log = []
@@ -701,10 +800,10 @@ if do_calc:
     if units < 100:
         # PVE 강제
         decision_log.append(f"세대수={units} (<100) → PVE 강제 선택")
-        q = pve_quote(bw, bl, mgmt_rate, pve_kind)
+        q = pve_quote(bw, bl, r_p, r_s, pve_process_cost, pve_kind)
         result_kind = "PVE"
         base_subtotal = q["소계"]
-        mgmt_total = q["관리비포함소계"]
+        mgmt_total = q["영업관리비포함"]
         prices = _pve_prices_from_quote(q)
     else:
         if central == "Yes":
@@ -712,10 +811,10 @@ if do_calc:
             matched = match_center_drain(df, shape, btype, bw, bl)
             if matched is None:
                 decision_log.append("GRP(중앙배수) 매칭 실패 → PVE 계산")
-                q = pve_quote(bw, bl, mgmt_rate, pve_kind)
+                q = pve_quote(bw, bl, r_p, r_s, pve_process_cost, pve_kind)
                 result_kind = "PVE"
                 base_subtotal = q["소계"]
-                mgmt_total = q["관리비포함소계"]
+                mgmt_total = q["영업관리비포함"]
                 prices = _pve_prices_from_quote(q)
             else:
                 row = matched["row"]
@@ -731,10 +830,10 @@ if do_calc:
                 )
                 if matched is None:
                     decision_log.append("사각형 매칭 실패 → PVE 계산")
-                    q = pve_quote(bw, bl, mgmt_rate, pve_kind)
+                    q = pve_quote(bw, bl, r_p, r_s, pve_process_cost, pve_kind)
                     result_kind = "PVE"
                     base_subtotal = q["소계"]
-                    mgmt_total = q["관리비포함소계"]
+                    mgmt_total = q["영업관리비포함"]
                     prices = _pve_prices_from_quote(q)
                 else:
                     row = matched["row"]
@@ -751,10 +850,10 @@ if do_calc:
                 matched = match_corner_shower(df, bw, bl, sw, sl, shw_eff, shl_eff)
                 if matched is None:
                     decision_log.append("코너형/샤워형 매칭 실패 → PVE 계산")
-                    q = pve_quote(bw, bl, mgmt_rate, pve_kind)
+                    q = pve_quote(bw, bl, r_p, r_s, pve_process_cost, pve_kind)
                     result_kind = "PVE"
                     base_subtotal = q["소계"]
-                    mgmt_total = q["관리비포함소계"]
+                    mgmt_total = q["영업관리비포함"]
                     prices = _pve_prices_from_quote(q)
                 else:
                     row = matched["row"]
@@ -763,13 +862,29 @@ if do_calc:
                     prices = _extract_prices_from_row(row)
                     decision_log.append(f"{result_kind} 매칭 성공 → 최소 소계 선택")
 
-        # 매칭 케이스에도 관리비 적용
+        # 매칭 케이스에도 관리비 적용 (GRP/FRP는 역산 방식)
         if mgmt_total == 0:
-            mgmt_total = int(round(base_subtotal * (1.0 + mgmt_rate)))
+            blocks = price_blocks_grp_frp(base_subtotal, r_p, r_s)
+            mgmt_total = blocks["영업관리비포함"]
 
     # 공통: 재질 라벨 및 규격(문자열) 정규화
     material_label = _map_floor_material_label(result_kind or "")
     floor_spec = f"{int(bw)}×{int(bl)}"  # 필요시 행(row)에서 규격 필드가 있으면 치환
+
+    # 관리비 계산 (세션 상태용)
+    if result_kind and "PVE" in result_kind.upper():
+        # PVE는 이미 계산된 q 사용
+        prod_fee = q.get("생산관리비", 0)
+        prod_incl = q.get("생산관리비포함", 0)
+        sales_fee = q.get("영업관리비", 0)
+        sales_incl = mgmt_total
+    else:
+        # GRP/FRP는 역산
+        blocks_session = price_blocks_grp_frp(base_subtotal, r_p, r_s)
+        prod_fee = blocks_session["생산관리비"]
+        prod_incl = blocks_session["생산관리비포함"]
+        sales_fee = blocks_session["영업관리비"]
+        sales_incl = blocks_session["영업관리비포함"]
 
     floor_result_payload = {
         "section": "floor",
@@ -784,7 +899,10 @@ if do_calc:
         "meta": {
             "result_kind": result_kind,
             "subtotal": int(base_subtotal),
-            "subtotal_with_mgmt": int(mgmt_total),
+            "생산관리비": int(prod_fee),
+            "생산관리비포함": int(prod_incl),
+            "영업관리비": int(sales_fee),
+            "영업관리비포함": int(sales_incl),
             "inputs": {
                 "central": central,
                 "shape": shape,
@@ -795,7 +913,8 @@ if do_calc:
                 "sl": (None if sl is None else int(sl)),
                 "shw": (None if shw_eff is None else int(shw_eff)),
                 "shl": (None if shl_eff is None else int(shl_eff)),
-                "mgmt_rate_pct": float(mgmt_rate_pct),
+                "prod_rate_pct": float(prod_rate_pct),
+                "sales_rate_pct": float(sales_rate_pct),
                 "pve_kind": pve_kind,
                 "units": int(units),
             },
@@ -863,12 +982,77 @@ if do_calc:
             f"**단가1/노무비/단가2**: {prices['단가1']:,} / {prices['노무비']:,} / {prices['단가2']:,}"
         )
         st.write(f"**소계(원)**: {base_subtotal:,}")
+        st.write(f"**생산관리비({prod_rate_pct:.1f}%)**: 포함")
         st.write(
-            f"**관리비 포함 소계(원)**: {mgmt_total:,}  (관리비율 {mgmt_rate_pct:.1f}%)"
+            f"**영업관리비 포함 소계(원)**: {mgmt_total:,}  (영업관리비율 {sales_rate_pct:.1f}%)"
         )
 
         st.info("결정 과정", icon="ℹ️")
         st.write("\n".join([f"- {x}" for x in decision_log]))
 
         st.markdown("---")
-        b1, b2 = st.columns([1, 1])
+
+        # ====== floor.json 저장 + 다운로드 버튼 ======
+        # 완전한 결과 payload (관리비 2단계 포함)
+        if result_kind and result_kind.upper() == "PVE":
+            # PVE는 직접 계산값 사용
+            floor_json_payload = {
+                "소재": result_kind,
+                "형태": shape,
+                "욕실폭": int(bw),
+                "욕실길이": int(bl),
+                "세면부폭": (None if sw is None else int(sw)),
+                "세면부길이": (None if sl is None else int(sl)),
+                "샤워부폭": (None if shw_eff is None else int(shw_eff)),
+                "샤워부길이": (None if shl_eff is None else int(shl_eff)),
+                "원재료비": int(prices.get("단가1", 0)),
+                "가공비": int(prices.get("노무비", 0)),
+                "소계": int(base_subtotal),
+                "생산관리비": int(q.get("생산관리비", 0)),
+                "생산관리비포함단가": int(q.get("생산관리비포함", 0)),
+                "영업관리비": int(q.get("영업관리비", 0)),
+                "영업관리비포함단가": int(mgmt_total),
+            }
+        else:
+            # GRP/FRP 매칭인 경우
+            blocks = price_blocks_grp_frp(base_subtotal, r_p, r_s)
+            floor_json_payload = {
+                "소재": result_kind,
+                "형태": shape,
+                "욕실폭": int(bw),
+                "욕실길이": int(bl),
+                "세면부폭": (None if sw is None else int(sw)),
+                "세면부길이": (None if sl is None else int(sl)),
+                "샤워부폭": (None if shw_eff is None else int(shw_eff)),
+                "샤워부길이": (None if shl_eff is None else int(shl_eff)),
+                "단가1": int(prices.get("단가1", 0)),
+                "노무비": int(prices.get("노무비", 0)),
+                "단가2": int(prices.get("단가2", 0)),
+                "소계": int(base_subtotal),
+                "생산관리비": int(blocks["생산관리비"]),
+                "생산관리비포함단가": int(blocks["생산관리비포함"]),
+                "영업관리비": int(blocks["영업관리비"]),
+                "영업관리비포함단가": int(blocks["영업관리비포함"]),
+            }
+
+        # 로컬 파일 저장
+        try:
+            with open("floor.json", "w", encoding="utf-8") as f:
+                json.dump(floor_json_payload, f, ensure_ascii=False, indent=2)
+            st.success("floor.json 파일이 저장되었습니다.")
+        except Exception as e:
+            st.error(f"floor.json 저장 실패: {e}")
+
+        # 다운로드 버튼
+        json_bytes = json.dumps(floor_json_payload, ensure_ascii=False, indent=2).encode("utf-8")
+        st.download_button(
+            label="📥 floor.json 다운로드",
+            data=json_bytes,
+            file_name="floor.json",
+            mime="application/json",
+            type="secondary",
+        )
+
+        # JSON 미리보기
+        with st.expander("저장된 JSON 미리보기"):
+            st.json(floor_json_payload)

@@ -53,6 +53,13 @@ WALL_RESULT_KEY = "wall_result"
 CEIL_DONE_KEY = "ceil_done"
 CEIL_RESULT_KEY = "ceil_result"
 
+# 공유 욕실 정보 세션 키 (바닥판에서 입력, 벽판/천장판에서 사용)
+SHARED_BATH_SHAPE_KEY = "shared_bath_shape"
+SHARED_BATH_WIDTH_KEY = "shared_bath_width"
+SHARED_BATH_LENGTH_KEY = "shared_bath_length"
+SHARED_SINK_WIDTH_KEY = "shared_sink_width"
+SHARED_MATERIAL_KEY = "shared_floor_material"  # 바닥판 재료 (PVE → +50 적용)
+
 
 def parse_tile(tile_str: str) -> Tuple[int, int]:
     """'300×600' 또는 '250×400' → (300, 600)"""
@@ -1150,20 +1157,46 @@ st.success("✅ 바닥판 계산이 완료되었습니다. 벽판 계산을 진�
 # 벽판 단가 설정 (기본값 30,000원)
 WALL_UNIT_PRICE = 30000
 
+# 바닥판에서 공유된 데이터 가져오기
+shared_shape = st.session_state.get(SHARED_BATH_SHAPE_KEY)
+shared_width = st.session_state.get(SHARED_BATH_WIDTH_KEY)
+shared_length = st.session_state.get(SHARED_BATH_LENGTH_KEY)
+shared_material = st.session_state.get(SHARED_MATERIAL_KEY)
+
+# 공유 데이터 존재 시 안내 메시지
+if shared_shape or shared_width or shared_length:
+    st.info("📂 바닥판 데이터 사용 중: 욕실형태, 가로/세로가 자동 반영됩니다.")
+
 with st.sidebar:
     st.header("기본 입력")
-    shape = st.radio("욕실형태", ["사각형", "코너형"], horizontal=True)
+
+    # 욕실형태: 바닥판 데이터가 있으면 자동 선택
+    default_shape = shared_shape if shared_shape else "사각형"
+    shape_options = ["사각형", "코너형"]
+    shape_index = shape_options.index(default_shape) if default_shape in shape_options else 0
+    shape = st.radio("욕실형태", shape_options, index=shape_index, horizontal=True,
+                    disabled=bool(shared_shape),
+                    help="바닥판에서 자동 반영" if shared_shape else None)
     split_kind = st.radio("세면/샤워 구분", ["구분 없음", "구분 있음"], horizontal=True)
     H = st.number_input("벽 높이 H (mm)", min_value=300, value=2200, step=50)
-    floor_type = st.radio("바닥판 유형", ["PVE", "그외(GRP/FRP)"], horizontal=True)
+
+    # 바닥판 유형: 공유 재료 데이터 우선 사용
+    default_floor_type = "PVE" if (shared_material and "PVE" in shared_material.upper()) else "그외(GRP/FRP)"
+    floor_type_options = ["PVE", "그외(GRP/FRP)"]
+    floor_type_index = floor_type_options.index(default_floor_type) if default_floor_type in floor_type_options else 0
+    floor_type = st.radio("바닥판 유형", floor_type_options, index=floor_type_index, horizontal=True,
+                         disabled=bool(shared_material),
+                         help="바닥판에서 자동 반영 (PVE → +50mm)" if shared_material else None)
+
+    # 레거시 floor_res 지원 (기존 세션 키 호환)
+    if not shared_material:
+        floor_res = st.session_state.get(FLOOR_RESULT_KEY)
+        if floor_res:
+            mat = str(floor_res.get("material", "")).upper()
+            floor_type = "PVE" if "PVE" in mat else "그외(GRP/FRP)"
+            st.sidebar.info(f"바닥 재질 자동 반영: {floor_type}")
+
     tile = st.selectbox("벽타일 규격", ["300×600", "250×400"])
-    # floor 연동: 바닥이 PVE면 자동으로 기본값 설정
-    floor_res = st.session_state.get(FLOOR_RESULT_KEY)  # {'material': 'PVE' | 'GRP'...}
-    if floor_res:
-        mat = str(floor_res.get("material", "")).upper()
-        # 사이드바 라디오에 반영(이미 선언된 floor_type 변수를 덮어씀)
-        floor_type = "PVE" if "PVE" in mat else "그외(GRP/FRP)"
-        st.sidebar.info(f"바닥 재질 자동 반영: {floor_type}")
     H_eff = effective_height(H, floor_type)
 
     st.divider()
@@ -1242,9 +1275,17 @@ if shape == "사각형":
     st.subheader("사각형 입력")
     colA, colB = st.columns(2)
     with colA:
-        BL = st.number_input("욕실 길이 BL (mm)", min_value=500, value=2000, step=50)
+        # 욕실 길이: 바닥판 데이터가 있으면 자동 설정
+        default_bl = shared_length if shared_length else 2000
+        BL = st.number_input("욕실 길이 BL (mm)", min_value=500, value=default_bl, step=50,
+                            disabled=bool(shared_length),
+                            help="바닥판에서 자동 반영" if shared_length else None)
     with colB:
-        BW = st.number_input("욕실 폭 BW (mm)", min_value=500, value=1600, step=50)
+        # 욕실 폭: 바닥판 데이터가 있으면 자동 설정
+        default_bw = shared_width if shared_width else 1600
+        BW = st.number_input("욕실 폭 BW (mm)", min_value=500, value=default_bw, step=50,
+                            disabled=bool(shared_width),
+                            help="바닥판에서 자동 반영" if shared_width else None)
 
     X = None
     if split_kind == "구분 있음":
@@ -1547,6 +1588,12 @@ if shape == "사각형":
 else:
     # 코너형
     st.subheader("코너형 입력 (W1~W6)")
+
+    # 바닥판 데이터 참고 표시
+    if shared_width and shared_length:
+        st.info(f"📂 바닥판 참고: 가로방향(W1) ≈ {shared_length}mm, 세로방향(W2) ≈ {shared_width}mm")
+        st.caption("⚠️ 코너형은 W3~W6 세부 치수를 직접 입력해주세요.")
+
     cA, cB = st.columns(2)
     with cA:
         st.markdown("**가로(바닥) 방향**")

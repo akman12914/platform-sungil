@@ -179,12 +179,16 @@ def convert_ceiling_data(ceil_result: dict) -> dict:
     # JSON export 데이터 사용 (이미 변환된 포맷)
     json_export = result.get("json_export", {})
     if json_export:
+        # 점검구가 딕셔너리 형태인 경우 개수만 추출
+        jgm = json_export.get("점검구", 1)
+        hole_count = jgm.get("개수", 1) if isinstance(jgm, dict) else jgm
+
         return {
             "재질": json_export.get("재질", material),
             "총개수": json_export.get("총개수", 0),
             "바디판넬": json_export.get("바디판넬", {}),
             "사이드판넬": json_export.get("사이드판넬", {}),
-            "천공구": json_export.get("점검구", 1),
+            "천공구": hole_count,
             "단가": json_export.get("단가", 0),
         }
 
@@ -555,7 +559,10 @@ else:
         body = ceiling_data.get("바디판넬", {}) or {}
         side = ceiling_data.get("사이드판넬", {}) or {}
         total_cnt = float(ceiling_data.get("총개수", 0))
-        hole_cnt = float(ceiling_data.get("천공구", 0))
+
+        # 천공구: 딕셔너리인 경우 개수 필드 추출
+        hole_data = ceiling_data.get("천공구", 0)
+        hole_cnt = float(hole_data.get("개수", 0) if isinstance(hole_data, dict) else hole_data)
 
         # 메인 판
         if material == "ABS":

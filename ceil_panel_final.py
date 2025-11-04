@@ -39,6 +39,17 @@ os.makedirs(EXPORT_DIR, exist_ok=True)
 CEIL_DONE_KEY = "ceil_done"
 CEIL_RESULT_KEY = "ceil_result"
 
+# 공유 카탈로그 세션 키 (모든 페이지에서 공통 사용)
+SHARED_EXCEL_KEY = "shared_excel_file"
+SHARED_EXCEL_NAME_KEY = "shared_excel_filename"
+
+# 공유 욕실 정보 세션 키 (바닥판에서 입력, 벽판/천장판에서 사용)
+SHARED_BATH_SHAPE_KEY = "shared_bath_shape"  # 욕실 형태: "사각형" or "코너형"
+SHARED_BATH_WIDTH_KEY = "shared_bath_width"  # 욕실 폭 (W)
+SHARED_BATH_LENGTH_KEY = "shared_bath_length"  # 욕실 길이 (L)
+SHARED_SINK_WIDTH_KEY = "shared_sink_width"  # 세면부 폭 (경계선 정보, split용)
+SHARED_MATERIAL_KEY = "shared_floor_material"  # 바닥판 재료
+
 # =========================================
 # 전역 상수/옵션
 # =========================================
@@ -696,11 +707,25 @@ st.title("천장판 계산 프로그램 (UI + 엔진 통합)")
 # -------- 카탈로그 업로드 --------
 with st.sidebar:
     st.header("천장판 데이터 로딩")
-    up = st.file_uploader("엑셀 업로드 (시트명: '천장판')", type=["xlsx"])
-    st.caption("※ 카탈로그(엑셀)만 사용합니다. 기본 내장 카탈로그는 사용하지 않습니다.")
+    st.info("📂 바닥판에서 업로드한 Excel 카탈로그를 사용합니다.")
+
+    # 바닥판에서 공유된 데이터 표시
+    shared_shape = st.session_state.get(SHARED_BATH_SHAPE_KEY)
+    shared_width = st.session_state.get(SHARED_BATH_WIDTH_KEY)
+    shared_length = st.session_state.get(SHARED_BATH_LENGTH_KEY)
+    shared_sink_w = st.session_state.get(SHARED_SINK_WIDTH_KEY)
+
+    if shared_shape:
+        st.success(f"✅ 바닥판 데이터 사용 중\n- 형태: {shared_shape}\n- 폭×길이: {shared_width}×{shared_length}mm\n- 세면부 폭: {shared_sink_w}mm")
 
     st.header("욕실유형")
-    bath_type = st.radio("욕실유형", ["사각형 욕실", "코너형 욕실"], horizontal=False)
+    # 바닥판 데이터가 있으면 자동 설정, 없으면 수동 선택
+    if shared_shape:
+        bath_type_map = {"사각형": "사각형 욕실", "코너형": "코너형 욕실"}
+        bath_type = bath_type_map.get(shared_shape, "사각형 욕실")
+        st.radio("욕실유형 (바닥판 자동 반영)", [bath_type], horizontal=False, disabled=True)
+    else:
+        bath_type = st.radio("욕실유형", ["사각형 욕실", "코너형 욕실"], horizontal=False)
 
     st.header("계산 옵션 / 관리비율")
 
@@ -711,13 +736,19 @@ with st.sidebar:
                                      min_value=0.0, max_value=80.0,
                                      value=20.0, step=0.5, help="예: 20 → 20%")
 
-# -------- read Excel file ----------
-if up:
+# -------- read Excel file (shared state only) ----------
+# 바닥판에서 공유된 Excel 파일 사용
+excel_file = st.session_state.get(SHARED_EXCEL_KEY)
+excel_filename = st.session_state.get(SHARED_EXCEL_NAME_KEY, "알 수 없음")
+
+if excel_file:
     try:
-        xls = pd.ExcelFile(up)
+        xls = pd.ExcelFile(excel_file)
         df_cat = pd.read_excel(xls, sheet_name="천장판")
         BODY, SIDE, HATCH = load_catalog_from_excel(df_cat)
-        st.success(f"카탈로그 로드 완료 — BODY {len(BODY)}종, SIDE {len(SIDE)}종, 점검구 {len(HATCH)}종")
+
+        # 공유 카탈로그 표시
+        st.info(f"📂 공유 카탈로그 사용 중: {excel_filename} — BODY {len(BODY)}종, SIDE {len(SIDE)}종, 점검구 {len(HATCH)}종")
 
         # 👉 시공비 시트에서 천장판 절단 단가 가져오기
         try:
@@ -743,7 +774,8 @@ if up:
         st.error(f"엑셀 파싱 실패: {e}")
         st.stop()
 else:
-    st.warning("⚠️ 엑셀 파일을 업로드해주세요.")
+    st.warning("⚠️ 바닥판 페이지에서 엑셀 파일을 먼저 업로드해주세요.")
+    st.info("💡 바닥판에서 업로드한 Excel 카탈로그가 천장판과 벽판에 자동으로 공유됩니다.")
     st.stop()
 
 # 카탈로그 확인 UI (Expander)
@@ -786,20 +818,45 @@ calc_btn = None
 if bath_type == "사각형 욕실":
     c1, c2, c3 = st.columns(3)
     with c1:
-        W = st.number_input("가로 W (mm)", min_value=500, value=2000, step=50)
+        # 공유 데이터가 있으면 자동 설정, 없으면 기본값
+        default_w = shared_width if shared_width else 2000
+        W = st.number_input("가로 W (mm)", min_value=500, value=default_w, step=50,
+                           disabled=bool(shared_width),
+                           help="바닥판에서 자동 반영" if shared_width else None)
     with c2:
-        L = st.number_input("세로 L (mm)", min_value=500, value=1600, step=50)
+        default_l = shared_length if shared_length else 1600
+        L = st.number_input("세로 L (mm)", min_value=500, value=default_l, step=50,
+                           disabled=bool(shared_length),
+                           help="바닥판에서 자동 반영" if shared_length else None)
     with c3:
-        split_on = st.radio("세면/샤워 경계선", ["없음", "있음"], horizontal=True)
+        # 공유 경계선 정보가 있으면 자동으로 "있음" 선택
+        if shared_sink_w:
+            split_on = "있음"
+            st.radio("세면/샤워 경계선 (바닥판 자동 반영)", [split_on], horizontal=True, disabled=True)
+        else:
+            split_on = st.radio("세면/샤워 경계선", ["없음", "있음"], horizontal=True)
+
     split = None
     if split_on == "있음":
-        split = st.slider(
-            "경계선 X (mm, 가로 기준)",
-            min_value=100,
-            max_value=int(W),
-            step=50,
-            value=min(900, int(W)),
-        )
+        # 공유 세면부 폭이 있으면 자동 설정
+        if shared_sink_w:
+            split = shared_sink_w
+            st.slider(
+                "경계선 X (mm, 가로 기준) - 바닥판 자동 반영",
+                min_value=100,
+                max_value=int(W),
+                step=50,
+                value=split,
+                disabled=True
+            )
+        else:
+            split = st.slider(
+                "경계선 X (mm, 가로 기준)",
+                min_value=100,
+                max_value=int(W),
+                step=50,
+                value=min(900, int(W)),
+            )
 
     # 평면도
     st.subheader("도면 미리보기 — 사각")
@@ -811,6 +868,10 @@ if bath_type == "사각형 욕실":
     calc_btn = st.button("계산 실행", type="primary")
 
 else:
+    # 코너형: 바닥판 치수를 참고값으로 표시
+    if shared_width and shared_length:
+        st.info(f"ℹ️ 참고: 바닥판 전체 치수 {shared_width}×{shared_length}mm")
+
     colA, colB = st.columns(2)
     with colA:
         v3 = st.number_input("3번 변 (mm)", min_value=100, value=800, step=50)

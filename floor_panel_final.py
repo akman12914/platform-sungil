@@ -28,6 +28,17 @@ import pandas as pd
 FLOOR_DONE_KEY = "floor_done"
 FLOOR_RESULT_KEY = "floor_result"
 
+# 공유 카탈로그 세션 키 (모든 페이지에서 공통 사용)
+SHARED_EXCEL_KEY = "shared_excel_file"
+SHARED_EXCEL_NAME_KEY = "shared_excel_filename"
+
+# 공유 욕실 정보 세션 키
+SHARED_BATH_SHAPE_KEY = "shared_bath_shape"  # 욕실 형태: "사각형" or "코너형"
+SHARED_BATH_WIDTH_KEY = "shared_bath_width"  # 욕실 폭 (bw)
+SHARED_BATH_LENGTH_KEY = "shared_bath_length"  # 욕실 길이 (bl)
+SHARED_SINK_WIDTH_KEY = "shared_sink_width"  # 세면부 폭 (sw) - 경계선 정보
+SHARED_MATERIAL_KEY = "shared_floor_material"  # 바닥판 재료 (결과에서 추출)
+
 # ===== 경로 =====
 EXPORT_DIR = "exports"  # 섹션 JSON 저장 폴더
 os.makedirs(EXPORT_DIR, exist_ok=True)
@@ -739,15 +750,30 @@ def draw_bathroom(
 # ---------------------------
 st.title("바닥판 규격/옵션 산출")
 
-if not uploaded:
+# 업로드된 파일이 있으면 세션에 저장
+if uploaded:
+    st.session_state[SHARED_EXCEL_KEY] = uploaded
+    st.session_state[SHARED_EXCEL_NAME_KEY] = uploaded.name
+
+# 세션에 저장된 파일 사용 (현재 페이지 업로드 or 다른 페이지에서 업로드)
+excel_file = st.session_state.get(SHARED_EXCEL_KEY)
+excel_filename = st.session_state.get(SHARED_EXCEL_NAME_KEY, "알 수 없음")
+
+if not excel_file:
     st.info(
-        "왼쪽에서 엑셀 파일(필수 시트: **바닥판**, **시공비**)을 업로드한 뒤, **계산하기**를 눌러주세요."
+        "왼쪽에서 엑셀 파일(필수 시트: **바닥판**, **시공비**)을 업로드한 뒤, **계산하기**를 눌러주세요. (천장판/벽판 페이지에서 업로드한 파일도 사용 가능)"
     )
     st.stop()
 
+# 공유 카탈로그 표시
+if uploaded:
+    st.success(f"✅ 엑셀 로드 완료 (현재 페이지): {excel_filename}")
+else:
+    st.info(f"📂 공유 카탈로그 사용 중: {excel_filename}")
+
 # 엑셀 로딩
 try:
-    xls = pd.ExcelFile(uploaded)
+    xls = pd.ExcelFile(excel_file)
 except Exception as e:
     st.error(f"엑셀 로딩 실패: {e}")
     st.stop()
@@ -924,7 +950,15 @@ if do_calc:
     # 세션 상태에 자동 저장
     st.session_state[FLOOR_RESULT_KEY] = floor_result_payload
     st.session_state[FLOOR_DONE_KEY] = True
-    st.toast("바닥 계산 결과가 자동 저장되었습니다.", icon="✅")
+
+    # 공유 욕실 정보 저장 (벽판/천장판에서 사용)
+    st.session_state[SHARED_BATH_SHAPE_KEY] = shape  # "사각형" or "코너형"
+    st.session_state[SHARED_BATH_WIDTH_KEY] = int(bw)  # 욕실 폭
+    st.session_state[SHARED_BATH_LENGTH_KEY] = int(bl)  # 욕실 길이
+    st.session_state[SHARED_SINK_WIDTH_KEY] = int(sw)  # 세면부 폭 (경계선 정보)
+    st.session_state[SHARED_MATERIAL_KEY] = result_kind  # 바닥판 재료 (예: "PVE", "FRP", "GRP")
+
+    st.toast("바닥 계산 결과가 자동 저장되었습니다. (벽판/천장판에서 자동 사용)", icon="✅")
 
     # ---------------------------
     # 출력(UI) — 단 한 번만!

@@ -36,6 +36,9 @@ auth.require_auth()
 EXPORT_DIR = "exports"
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
+FLOOR_DONE_KEY = "floor_done"
+FLOOR_RESULT_KEY = "floor_result"
+
 CEIL_DONE_KEY = "ceil_done"
 CEIL_RESULT_KEY = "ceil_result"
 
@@ -665,7 +668,11 @@ def draw_matrix_sketch(
     margin_px: int = 20,
 ) -> Image.Image:
     cells, (Wmm, Lmm) = matrix_layout_coords(col_widths_mm, row_heights_mm)
-    img_w = int(Wmm * scale) + margin_px * 2
+
+    # 외부 텍스트를 위한 추가 여백 계산
+    extra_margin_right = 150  # 작은 패널 텍스트를 위한 오른쪽 여백
+
+    img_w = int(Wmm * scale) + margin_px * 2 + extra_margin_right
     img_h = int(Lmm * scale) + margin_px * 2
     img = Image.new("RGB", (max(600, img_w), max(360, img_h)), "white")
     draw = ImageDraw.Draw(img)
@@ -675,26 +682,86 @@ def draw_matrix_sketch(
     y1 = y0 + int(Lmm * scale)
     draw.rectangle([x0, y0, x1, y1], outline="black", width=3)
 
-    font = _get_font(11)
-
     for cell in cells:
         cx0 = x0 + int(cell["x0_mm"] * scale)
         cx1 = x0 + int(cell["x1_mm"] * scale)
         cy1 = y1 - int(cell["y0_mm"] * scale)
         cy0 = y1 - int(cell["y1_mm"] * scale)
         draw.rectangle([cx0, cy0, cx1, cy1], outline="#666666", width=2)
+
         label = (
             cell_labels.get((cell["row"], cell["col"]), "")
             if cell_labels
             else f"R{cell['row']}-C{cell['col']}"
         )
-        tx = (cx0 + cx1) // 2 - 32
-        ty = (cy0 + cy1) // 2 - 10
+
+        # 패널 크기(픽셀)에 따라 폰트 크기 결정
+        cell_width_px = cx1 - cx0
+        cell_height_px = cy1 - cy0
+
+        if cell_width_px > 100:
+            font_size = 11
+        elif cell_width_px > 50:
+            font_size = 9
+        else:
+            font_size = 8
+
+        font = _get_font(font_size)
 
         # 멀티라인 텍스트 처리
         lines = label.split("\n")
-        for i, line in enumerate(lines):
-            draw.text((tx, ty + i * 14), line, fill="black", font=font)
+
+        # 매우 작은 패널: 텍스트를 외부에 표시
+        if cell_width_px < 45:
+            # 패널 오른쪽에 화살표와 텍스트 표시
+            arrow_start_x = cx1 + 5
+            arrow_end_x = cx1 + 15
+            arrow_y = (cy0 + cy1) // 2
+
+            # 화살표 그리기
+            draw.line([(arrow_start_x, arrow_y), (arrow_end_x, arrow_y)], fill="#666666", width=2)
+            draw.polygon([(arrow_end_x, arrow_y), (arrow_end_x - 5, arrow_y - 3), (arrow_end_x - 5, arrow_y + 3)], fill="#666666")
+
+            # 텍스트 위치 (화살표 오른쪽)
+            text_x = arrow_end_x + 5
+            text_y = arrow_y
+
+            # 멀티라인 텍스트의 전체 높이 계산
+            line_height = font_size + 2
+            total_text_height = len(lines) * line_height
+            text_start_y = text_y - total_text_height // 2
+
+            # 배경 박스 그리기 (가독성 향상)
+            max_line_width = max([draw.textbbox((0, 0), line, font=font)[2] for line in lines])
+            bg_padding = 3
+            draw.rectangle(
+                [text_x - bg_padding, text_start_y - bg_padding,
+                 text_x + max_line_width + bg_padding, text_start_y + total_text_height + bg_padding],
+                fill="white", outline="#cccccc", width=1
+            )
+
+            # 텍스트 그리기
+            for i, line in enumerate(lines):
+                draw.text((text_x, text_start_y + i * line_height), line, fill="black", font=font)
+        else:
+            # 일반 패널: 내부에 텍스트 표시 (중앙 정렬)
+            line_height = font_size + 2
+            total_text_height = len(lines) * line_height
+
+            # 패널 중앙 계산
+            center_x = (cx0 + cx1) // 2
+            center_y = (cy0 + cy1) // 2
+
+            # 텍스트 시작 위치 (수직 중앙 정렬)
+            text_start_y = center_y - total_text_height // 2
+
+            for i, line in enumerate(lines):
+                # 각 라인의 실제 너비 측정하여 수평 중앙 정렬
+                bbox = draw.textbbox((0, 0), line, font=font)
+                text_width = bbox[2] - bbox[0]
+                tx = center_x - text_width // 2
+                ty = text_start_y + i * line_height
+                draw.text((tx, ty), line, fill="black", font=font)
 
     return img
 
@@ -703,6 +770,56 @@ def draw_matrix_sketch(
 # UI 시작
 # =========================================
 st.title("천장판 계산 프로그램 (UI + 엔진 통합)")
+
+# ========== 바닥판 계산 의존성 체크 ==========
+floor_done = st.session_state.get(FLOOR_DONE_KEY, False)
+floor_result = st.session_state.get(FLOOR_RESULT_KEY)
+
+if not floor_done or not floor_result:
+    st.warning("⚠️ 천장판 계산을 진행하려면 먼저 **바닥판 계산**을 완료해야 합니다.")
+
+    # 안내 카드
+    st.markdown(
+        """
+    <div style="
+        border: 1px solid #f59e0b;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 16px 0;
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    ">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+            <span style="font-size: 24px;">📋</span>
+            <h3 style="margin: 0; color: #0f172a; font-weight: 700;">계산 순서 안내</h3>
+        </div>
+        <p style="margin: 0 0 12px 36px; color: #78350f; line-height: 1.6;">
+            성일 시스템은 순차적인 계산 흐름을 따릅니다:
+        </p>
+        <div style="margin-left: 36px; padding: 12px; background: white; border-radius: 8px; border: 1px solid #f59e0b;">
+            <p style="margin: 0; color: #92400e; font-size: 0.95rem; line-height: 1.6;">
+                <strong>1단계:</strong> 🟦 바닥판 계산<br>
+                <strong>2단계:</strong> 🟩 벽판 계산<br>
+                <strong>3단계:</strong> 🟨 천장판 계산 ← <em>현재 페이지</em><br>
+                <strong>4단계:</strong> 📋 견적서 생성
+            </p>
+        </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # 바닥판 계산 페이지로 이동 버튼
+    col_spacer, col_btn, col_spacer2 = st.columns([1, 2, 1])
+    with col_btn:
+        st.page_link(
+            "pages/1_바닥판_계산.py", label="🟦 바닥판 계산 시작하기", icon=None
+        )
+
+    st.stop()  # 바닥판 미완료 시 이후 UI 차단
+
+# 바닥판 완료 시 성공 메시지
+st.success("✅ 바닥판 계산이 완료되었습니다. 천장판 계산을 진행할 수 있습니다.")
 
 # -------- 카탈로그 업로드 --------
 with st.sidebar:

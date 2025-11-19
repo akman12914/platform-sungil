@@ -412,6 +412,35 @@ class FaceSpec:
     height_mm: int
     note: str
 
+@st.cache_data
+def parse_price_file(file_data: bytes) -> Tuple[Optional[int], str]:
+    """
+    엑셀 파일에서 벽판 단가를 파싱합니다.
+    Streamlit cache를 사용하여 반복 파싱을 방지합니다.
+
+    Args:
+        file_data: 업로드된 파일의 바이트 데이터
+
+    Returns:
+        (단가, 메시지)
+    """
+    try:
+        xls = pd.ExcelFile(file_data)
+        if "자재단가내역" not in xls.sheet_names:
+            return None, "'자재단가내역' 시트를 찾지 못해 기본단가 사용"
+
+        df_price = pd.read_excel(xls, "자재단가내역")
+        wall_rows = df_price[df_price["품목"] == "벽판"]
+
+        if wall_rows.empty:
+            return None, "엑셀에 '품목=벽판' 행이 없어 기본단가 사용"
+
+        unit_price = int(wall_rows.iloc[0]["단가"])
+        return unit_price, f"엑셀에서 벽판단가 {unit_price:,}원 적용"
+
+    except Exception as ex:
+        return None, f"엑셀 읽기 오류: {ex}"
+
 def wall_label(shape: str, wall_id: int) -> str:
     return f"W{wall_id}"
 
@@ -513,47 +542,101 @@ def draw_rect_preview(
     has_split: bool, X: Optional[int],
     door_info: Optional[Tuple[int, float, float, int]] = None,
 ) -> Image.Image:
-    """사각형 평면도. 라벨: W1~W4"""
+    """사각형 평면도. 라벨: W1~W4 (사각형을 조금 줄이고, 폰트는 키움)"""
+    # 가로/세로 뒤집기 방지
     if BW > BL:
         BL, BW = BW, BL
+
     CANVAS_W = 760
-    MARGIN = 20
-    sx = (CANVAS_W - 2*MARGIN) / max(1, float(BL))
+    MARGIN = 60  # 기존 20 → 60 : 사각형을 줄이고 라벨 공간 확보
+
+    # 폰트 크게 (가능하면 DejaVuSans, 없으면 기본)
+    try:
+        from PIL import ImageFont
+        font = ImageFont.truetype("DejaVuSans.ttf", 18)  # 폰트 크기 ↑
+    except Exception:
+        font = None
+
+    # 라벨 높이/여백
+    if font:
+        try:
+            bbox = font.getbbox("W1")
+            label_h = bbox[3] - bbox[1]
+        except Exception:
+            label_h = font.getsize("W1")[1]
+    else:
+        label_h = 14
+    LABEL_MARGIN = 10
+
+    # 스케일 계산 (여유 공간 남기고 사각형 축소)
+    sx = (CANVAS_W - 2 * MARGIN) / max(1.0, float(BL))
     sy = sx
-    CANVAS_H = int(BW * sy + 2*MARGIN)
+    rect_h_px = BW * sy
+    CANVAS_H = int(rect_h_px + 2 * MARGIN + label_h)  # 아래쪽에 라벨 공간 추가
 
     img = Image.new("RGB", (CANVAS_W, CANVAS_H), "white")
     drw = ImageDraw.Draw(img)
-    x0, y0 = MARGIN, MARGIN
+
+    # 사각형 위치
+    x0 = MARGIN
+    y0 = MARGIN
     x1 = x0 + int(BL * sx)
     y1 = y0 + int(BW * sy)
 
     drw.rectangle([x0, y0, x1, y1], outline="black", width=3)
 
+    # 세면/샤워 경계선
     if has_split and X is not None:
         gx = x0 + int(X * sx)
         drw.line([gx, y0, gx, y1], fill="blue", width=3)
 
+    # 문(도어)
     if door_info:
         wall_id, s, e, W_wall = door_info
         if wall_id == 1:
-            xs = x0 + int(s * sx); xe = x0 + int(e * sx); y = y1
+            xs = x0 + int(s * sx)
+            xe = x0 + int(e * sx)
+            y = y1
             drw.line([xs, y, xe, y], fill="red", width=5)
         elif wall_id == 3:
-            xs = x0 + int(s * sx); xe = x0 + int(e * sx); y = y0
+            xs = x0 + int(s * sx)
+            xe = x0 + int(e * sx)
+            y = y0
             drw.line([xs, y, xe, y], fill="red", width=5)
         elif wall_id == 2:
-            ys = y0 + int(s * sy); ye = y0 + int(e * sy); x = x1
+            ys = y0 + int(s * sy)
+            ye = y0 + int(e * sy)
+            x = x1
             drw.line([x, ys, x, ye], fill="red", width=5)
         elif wall_id == 4:
-            ys = y0 + int(s * sy); ye = y0 + int(e * sy); x = x0
+            ys = y0 + int(s * sy)
+            ye = y0 + int(e * sy)
+            x = x0
             drw.line([x, ys, x, ye], fill="red", width=5)
 
-    off = 14
-    drw.text(((x0 + x1)//2 - 12, y1 + off - 8), "W1", fill="black")
-    drw.text((x1 + off, (y0 + y1)//2 - 8),       "W2", fill="black")
-    drw.text(((x0 + x1)//2 - 12, y0 - off - 8),  "W3", fill="black")
-    drw.text((x0 - off - 18, (y0 + y1)//2 - 8),  "W4", fill="black")
+    # 가운데 정렬 텍스트 유틸
+    def draw_centered(text: str, cx: float, cy: float):
+        if font:
+            try:
+                bbox = font.getbbox(text)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
+            except Exception:
+                tw, th = font.getsize(text)
+            drw.text((cx - tw / 2, cy - th / 2), text, font=font, fill="black")
+        else:
+            drw.text((cx - 12, cy - 7), text, fill="black")
+
+    # 라벨 배치 (W1~W4)
+    # 아래(W1)
+    draw_centered("W1", (x0 + x1) / 2, y1 + LABEL_MARGIN + label_h / 2)
+    # 위(W3)
+    draw_centered("W3", (x0 + x1) / 2, y0 - LABEL_MARGIN - label_h / 2)
+    # 오른쪽(W2)
+    draw_centered("W2", x1 + LABEL_MARGIN + label_h / 2, (y0 + y1) / 2)
+    # 왼쪽(W4)
+    draw_centered("W4", x0 - LABEL_MARGIN - label_h / 2, (y0 + y1) / 2)
+
     return img
 
 def draw_corner_preview(
@@ -633,11 +716,7 @@ def draw_corner_preview(
     # 샤워부 라벨 (대략 중앙)
     cx = (shower_x0 + shower_x1) / 2.0
     cy = (shower_y0 + shower_y1) / 2.0
-    drw.text(
-        (X(cx) - 18, Y(cy) - 7),
-        "샤워부",
-        fill="black",
-    )
+    drw.text((X(cx) - 18, Y(cy) - 7), "샤워부", fill="black")
 
     # 4) 세면/샤워 경계선 (W3 위치)
     if has_split:
@@ -830,25 +909,14 @@ if "last_price_msg" not in st.session_state:
 excel_file = st.session_state.get(SHARED_EXCEL_KEY)
 excel_filename = st.session_state.get(SHARED_EXCEL_NAME_KEY, "알 수 없음")
 
-# 엑셀 파일이 있으면 단가 읽기
+# 엑셀 파일이 있으면 단가 읽기 (캐시된 파싱 사용)
 if excel_file is not None:
-    try:
-        xls = pd.ExcelFile(excel_file)
-        if "자재단가내역" in xls.sheet_names:
-            df_price = pd.read_excel(xls, "자재단가내역")
-            # 조건: 품목='벽판' 만 우선 사용
-            wall_rows = df_price[df_price["품목"] == "벽판"]
-            if not wall_rows.empty:
-                # 첫 행만 사용
-                unit_price = int(wall_rows.iloc[0]["단가"])
-                st.session_state["wall_unit_price"] = unit_price
-                st.session_state["last_price_msg"] = f"엑셀에서 벽판단가 {unit_price:,}원 적용"
-            else:
-                st.session_state["last_price_msg"] = "엑셀에 '품목=벽판' 행이 없어 기본단가 사용"
-        else:
-            st.session_state["last_price_msg"] = "'자재단가내역' 시트를 찾지 못해 기본단가 사용"
-    except Exception as ex:
-        st.session_state["last_price_msg"] = f"엑셀 읽기 오류: {ex}"
+    excel_file.seek(0)  # 파일 포인터를 처음으로 리셋
+    file_bytes = excel_file.read()
+    unit_price, msg = parse_price_file(file_bytes)
+    if unit_price is not None:
+        st.session_state["wall_unit_price"] = unit_price
+    st.session_state["last_price_msg"] = msg
 
 # 카탈로그 확인 UI
 with st.expander("📋 업로드된 엑셀 정보 확인", expanded=False):

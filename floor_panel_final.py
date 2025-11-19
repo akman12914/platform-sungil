@@ -209,6 +209,36 @@ def get_pve_process_cost(df_cost: pd.DataFrame) -> Optional[int]:
     return int(vals.iloc[0]) if not vals.empty else None
 
 
+@st.cache_data
+def load_floor_panel_data(file_data: bytes) -> Tuple[pd.DataFrame, Optional[int]]:
+    """
+    바닥판 엑셀 파일을 로드하고 정규화합니다.
+    Streamlit cache를 사용하여 반복 로딩을 방지합니다.
+
+    Args:
+        file_data: 업로드된 파일의 바이트 데이터
+
+    Returns:
+        (정규화된 바닥판 DataFrame, PVE 시공비 또는 None)
+    """
+    xls = pd.ExcelFile(file_data)
+
+    missing_sheets = [s for s in ["바닥판", "시공비"] if s not in xls.sheet_names]
+    if missing_sheets:
+        raise ValueError(f"필수 시트 누락: {missing_sheets}")
+
+    df_raw = pd.read_excel(xls, sheet_name="바닥판")
+    df = normalize_df(df_raw)
+
+    try:
+        df_cost = pd.read_excel(xls, sheet_name="시공비")
+        pve_process_cost = get_pve_process_cost(df_cost)
+    except Exception:
+        pve_process_cost = None
+
+    return df, pve_process_cost
+
+
 def exact_series(s: pd.Series, v: Optional[float]) -> pd.Series:
     if v is None:
         return pd.Series(True, index=s.index)
@@ -443,30 +473,17 @@ if uploaded is not None:
     st.session_state[SHARED_EXCEL_KEY] = uploaded
     st.session_state[SHARED_EXCEL_NAME_KEY] = uploaded.name
 
-# 엑셀 로딩
+# 엑셀 로딩 (캐시된 파싱 사용)
 try:
-    xls = pd.ExcelFile(uploaded)
+    uploaded.seek(0)  # 파일 포인터를 처음으로 리셋
+    file_bytes = uploaded.read()
+    df, pve_process_cost = load_floor_panel_data(file_bytes)
+except ValueError as e:
+    st.error(f"필수 시트 누락: {e} — 엑셀을 확인하세요.")
+    st.stop()
 except Exception as e:
-    st.error(f"엑셀 로딩 실패: {e}")
+    st.error(f"엑셀 파싱 실패: {e}")
     st.stop()
-
-missing_sheets = [s for s in ["바닥판","시공비"] if s not in xls.sheet_names]
-if missing_sheets:
-    st.error(f"필수 시트 누락: {missing_sheets} — 엑셀을 확인하세요.")
-    st.stop()
-
-try:
-    df_raw = pd.read_excel(xls, sheet_name="바닥판")
-    df = normalize_df(df_raw)
-except Exception as e:
-    st.error(f"'바닥판' 시트 파싱 실패: {e}")
-    st.stop()
-
-try:
-    df_cost = pd.read_excel(xls, sheet_name="시공비")
-    pve_process_cost = get_pve_process_cost(df_cost)   # 못 찾으면 None
-except Exception:
-    pve_process_cost = None
 
 if do_calc:
     # 입력 유효성
@@ -563,33 +580,64 @@ if do_calc:
     # 결과를 도면 아래쪽으로 이동
     st.markdown("---")
     st.subheader("매칭·단가 결과")
-    st.write(f"**세대수**: {units}")
 
     # 대체 매칭된 경우 표시
     display_type = user_type
     if selected_alternative is not None:
         display_type = f"{user_type} → {matched_user_type} (대체)"
 
-    st.write(f"**유형/형태/용도**: {display_type} / {shape} / {usage}")
-    st.write(f"**치수**: L={L:,} mm, W={W:,} mm")
-    if boundary == "구분" and (sw is not None and sl is not None and shw is not None and shl is not None):
-        st.write(f"**세면부**: 폭={sw:,} mm, 길이={sl:,} mm")
-        st.write(f"**샤워부**: 폭={shw:,} mm, 길이={shl:,} mm")
+    # 결과를 딕셔너리 리스트로 구성
+    result_data = [
+        {"항목": "세대수", "값": str(units)},
+        {"항목": "유형/형태/용도", "값": f"{display_type} / {shape} / {usage}"},
+        {"항목": "치수", "값": f"L={L:,} mm, W={W:,} mm"},
+    ]
 
-    st.write(f"**소재(선택)**: {result['소재']}")
+    # 경계 구분 시 세면/샤워 치수 추가
+    if boundary == "구분" and (
+        sw is not None and sl is not None and shw is not None and shl is not None
+    ):
+        result_data.append({"항목": "세면부", "값": f"폭={sw:,} mm, 길이={sl:,} mm"})
+        result_data.append({"항목": "샤워부", "값": f"폭={shw:,} mm, 길이={shl:,} mm"})
+
+    # 단가 정보
+    result_data.append({"항목": "소재(선택)", "값": result["소재"]})
+
     if result["세면부단가"] is not None:
-        st.write(f"**세면부바닥판 단가**: {result['세면부단가']:,} 원")
+        result_data.append(
+            {"항목": "세면부바닥판 단가", "값": f"{result['세면부단가']:,} 원"}
+        )
     if result["샤워부단가"] is not None:
-        st.write(f"**샤워부바닥판 단가**: {result['샤워부단가']:,} 원")
+        result_data.append(
+            {"항목": "샤워부바닥판 단가", "값": f"{result['샤워부단가']:,} 원"}
+        )
 
-    st.write(f"**소계**: {result['소계']:,} 원")
-    st.write(f"**생산관리비({prod_rate_pct:.1f}%)**: {result['생산관리비']:,} 원")
-    st.write(f"**생산관리비 포함**: {result['생산관리비포함']:,} 원")
-    st.write(f"**영업관리비({sales_rate_pct:.1f}%)**: {result['영업관리비']:,} 원")
-    st.write(f"**영업관리비 포함(최종)**: {result['영업관리비포함']:,} 원")
+    result_data.extend(
+        [
+            {"항목": "소계", "값": f"{result['소계']:,} 원"},
+            {
+                "항목": f"생산관리비({prod_rate_pct:.1f}%)",
+                "값": f"{result['생산관리비']:,} 원",
+            },
+            {"항목": "생산관리비 포함", "값": f"{result['생산관리비포함']:,} 원"},
+            {
+                "항목": f"영업관리비({sales_rate_pct:.1f}%)",
+                "값": f"{result['영업관리비']:,} 원",
+            },
+            {"항목": "영업관리비 포함(최종)", "값": f"{result['영업관리비포함']:,} 원"},
+        ]
+    )
+
+    # 표로 표시
+    result_df = pd.DataFrame(result_data)
+    st.dataframe(result_df, use_container_width=True, hide_index=True)
 
     st.info("의사결정 로그", icon="ℹ️")
-    st.write("\n".join([f"- {x}" for x in decision_log]))
+    # 의사결정 로그를 표로 변환
+    log_df = pd.DataFrame(
+        [{"단계": i + 1, "결정": msg} for i, msg in enumerate(decision_log)]
+    )
+    st.dataframe(log_df, use_container_width=True, hide_index=True)
 
     # =========================================
     # 세션 상태 저장 및 공유 데이터 설정

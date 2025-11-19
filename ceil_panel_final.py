@@ -162,6 +162,46 @@ def _to_int(x):
     return int(float(x))
 
 
+@st.cache_data
+def load_ceiling_panel_data(file_data: bytes) -> Tuple[List[Panel], List[Panel], List[Panel], int]:
+    """
+    천장판 엑셀 파일을 로드하고 카탈로그를 파싱합니다.
+    Streamlit cache를 사용하여 반복 로딩을 방지합니다.
+
+    Args:
+        file_data: 업로드된 파일의 바이트 데이터
+
+    Returns:
+        (BODY 리스트, SIDE 리스트, HATCH 리스트, CUT_COST)
+    """
+    xls = pd.ExcelFile(file_data)
+
+    # 천장판 시트 로딩
+    if "천장판" not in xls.sheet_names:
+        raise ValueError("'천장판' 시트를 찾을 수 없습니다.")
+
+    df_cat = pd.read_excel(xls, sheet_name="천장판")
+    body, side, hatch = load_catalog_from_excel(df_cat)
+
+    # 절단 비용 로딩 (시공비 시트)
+    cut_cost = CUT_COST  # 기본값
+    try:
+        if "시공비" in xls.sheet_names:
+            df_cost = pd.read_excel(xls, sheet_name="시공비")
+            df_cost["항목"] = df_cost["항목"].astype(str).str.strip()
+            df_cost["공정"] = df_cost["공정"].astype(str).str.strip()
+
+            mask = (df_cost["항목"] == "천장판") & (df_cost["공정"] == "절단")
+            if mask.any():
+                cut_val = df_cost.loc[mask, "시공비"].iloc[0]
+                if pd.notna(cut_val):
+                    cut_cost = int(float(str(cut_val).replace(",", "")))
+    except Exception:
+        pass  # 실패 시 기본값 사용
+
+    return body, side, hatch, cut_cost
+
+
 def load_catalog_from_excel(df: pd.DataFrame) -> Tuple[List[Panel], List[Panel], List[Panel]]:
     req = {"판넬/점검구", "품명", "폭", "길이", "소계"}
     if not req.issubset(set(df.columns)):
@@ -1651,32 +1691,17 @@ excel_filename = st.session_state.get(SHARED_EXCEL_NAME_KEY, "알 수 없음")
 
 if excel_file:
     try:
-        xls = pd.ExcelFile(excel_file)
-        df_cat = pd.read_excel(xls, sheet_name="천장판")
-        BODY, SIDE, HATCH = load_catalog_from_excel(df_cat)
+        # 캐시된 함수로 데이터 로드
+        excel_file.seek(0)  # 파일 포인터를 처음으로 리셋
+        file_bytes = excel_file.read()
+        BODY, SIDE, HATCH, CUT_COST = load_ceiling_panel_data(file_bytes)
 
         # 공유 카탈로그 표시
         st.info(f"📂 공유 카탈로그 사용 중: {excel_filename} — BODY {len(BODY)}종, SIDE {len(SIDE)}종, 점검구 {len(HATCH)}종")
 
-        # 👉 시공비 시트에서 천장판 절단 단가 가져오기
-        try:
-            df_cost = pd.read_excel(xls, sheet_name="시공비")
-            df_cost["항목"] = df_cost["항목"].astype(str).str.strip()
-            df_cost["공정"] = df_cost["공정"].astype(str).str.strip()
-
-            mask = (df_cost["항목"] == "천장판") & (df_cost["공정"] == "절단")
-            if mask.any():
-                cut_val = df_cost.loc[mask, "시공비"].iloc[0]
-                if isinstance(cut_val, str):
-                    cut_val = cut_val.replace(",", "")
-                cut_val = float(cut_val)
-
-                # ★ 여기서 그냥 덮어쓰기만 하면 됨
-                CUT_COST = int(round(cut_val))
-
-                st.info(f"시공비 시트에서 천장판 절단비 {CUT_COST:,}원 로드됨")
-        except Exception as e:
-            st.warning(f"'시공비' 시트에서 천장판 절단비를 읽지 못해 기본값({CUT_COST})을 사용합니다. 상세: {e}")
+        # 절단비가 기본값이 아니면 표시
+        if CUT_COST != 2500:  # 기본값과 다르면
+            st.info(f"시공비 시트에서 천장판 절단비 {CUT_COST:,}원 로드됨")
 
     except Exception as e:
         st.error(f"엑셀 파싱 실패: {e}")

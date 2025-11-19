@@ -17,19 +17,23 @@ from PIL import Image, ImageDraw
 # App & Sidebar
 # =========================================
 st.set_page_config(page_title="바닥판 매칭·단가 산출 + 도면 미리보기", layout="wide")
-st.title("바닥판 매칭·단가 산출 (GRP→FRP→PVE) + 도면 미리보기")
+st.title("바닥판 매칭·단가 산출")
 
 with st.sidebar:
     st.header("① 데이터 업로드")
-    uploaded = st.file_uploader("엑셀 업로드 (필수 시트: '바닥판', '시공비')", type=["xlsx", "xls"])
+    uploaded = st.file_uploader(
+        "엑셀 업로드 (필수 시트: '바닥판', '시공비')", type=["xlsx", "xls"]
+    )
 
     st.header("② 기본 입력")
     units = st.number_input("시공 세대수", min_value=1, step=1, value=100)
-    user_type  = st.radio("유형", ["기본형", "중앙배수"], horizontal=True)
-    shape      = st.radio("형태", ["사각형", "코너형"], horizontal=True)
-    usage      = st.radio("용도", ["샤워형", "욕조형"], horizontal=True)
-    is_access  = st.radio("주거약자 여부", ["아니오(일반형)", "예(주거약자)"], horizontal=True)
-    boundary   = st.radio("경계", ["구분", "구분없음"], horizontal=True)
+    user_type = st.radio("유형", ["기본형", "중앙배수"], horizontal=True)
+    shape = st.radio("형태", ["사각형", "코너형"], horizontal=True)
+    usage = st.radio("용도", ["샤워형", "욕조형"], horizontal=True)
+    is_access = st.radio(
+        "주거약자 여부", ["아니오(일반형)", "예(주거약자)"], horizontal=True
+    )
+    boundary = st.radio("경계", ["구분", "구분없음"], horizontal=True)
 
     st.header("③ 치수 입력 (mm)")
 
@@ -40,33 +44,55 @@ with st.sidebar:
 
     if shape == "사각형":
         # 길이 = 가로(밑변), 폭 = 세로
-        L = st.number_input("욕실 길이 L (가로, 밑변)", min_value=400, step=10, value=2100)
-        W = st.number_input("욕실 폭   W (세로)",       min_value=400, step=10, value=1400)
+        L = st.number_input(
+            "욕실 길이 L (가로, 밑변)", min_value=400, step=10, value=2100
+        )
+        W = st.number_input("욕실 폭   W (세로)", min_value=400, step=10, value=1400)
 
         # 구분 선택 시에만 경계점 입력
         if boundary == "구분":
             st.caption("세면/샤워 경계점 위치(가로 기준, 0<경계점<L)")
-            split = st.slider("세면/샤워 경계점 X (mm)", min_value=100, max_value=int(L)-100, step=50, value=min(1300, int(L)-100))
+            split = st.slider(
+                "세면/샤워 경계점 X (mm)",
+                min_value=100,
+                max_value=int(L) - 100,
+                step=50,
+                value=min(1300, int(L) - 100),
+            )
             # 세면/샤워 치수 계산
-            sw, sl = W, split    # 세면부: 폭=W, 길이=split
+            sw, sl = W, split  # 세면부: 폭=W, 길이=split
             shw, shl = W, L - split
         # 구분없음: 욕실 크기만 사용
 
     else:  # 코너형
         # 구분 선택 시 4변 입력, 구분없음 시 욕실크기만 입력
         if boundary == "구분":
-            st.caption("코너형 규칙: 1=3+5, 2=4+6 / 세면부(폭=2, 길이=3), 샤워부(폭=6, 길이=5)")
+            st.caption(
+                "코너형 규칙: 1=3+5, 2=4+6 / 세면부(폭=2, 길이=3), 샤워부(폭=6, 길이=5)"
+            )
             colA, colB = st.columns(2)
             with colA:
-                v3 = st.number_input("3번 변 (세면부 길이)",        min_value=200, step=50, value=1300)
-                v5 = st.number_input("5번 변 (샤워부 길이)", min_value=200, step=50, value=900)
+                v3 = st.number_input(
+                    "3번 변 (세면부 길이)", min_value=200, step=50, value=1300
+                )
+                v5 = st.number_input(
+                    "5번 변 (샤워부 길이)", min_value=200, step=50, value=900
+                )
                 v1 = int(v3 + v5)  # 1=3+5
-                st.text_input("1번 = 3번 + 5번 (욕실 길이 L)", value=str(v1), disabled=True)
+                st.text_input(
+                    "1번 = 3번 + 5번 (욕실 길이 L)", value=str(v1), disabled=True
+                )
             with colB:
-                v4 = st.number_input("4번 변 (오목 세로)", min_value=200, step=50, value=600)
-                v6 = st.number_input("6번 변 (샤워부 폭)", min_value=200, step=50, value=900)
+                v4 = st.number_input(
+                    "4번 변 (오목 세로)", min_value=200, step=50, value=600
+                )
+                v6 = st.number_input(
+                    "6번 변 (샤워부 폭)", min_value=200, step=50, value=900
+                )
                 v2 = int(v4 + v6)  # 2=4+6
-                st.text_input("2번 = 4번 + 6번 (욕실 폭 W)", value=str(v2), disabled=True)
+                st.text_input(
+                    "2번 = 4번 + 6번 (욕실 폭 W)", value=str(v2), disabled=True
+                )
 
             L, W = v1, v2
             # 4변 입력 시 세면/샤워 세부 치수 설정
@@ -74,12 +100,20 @@ with st.sidebar:
             shw, shl = v6, v5
         else:
             # 구분없음: 욕실크기만 입력
-            L = st.number_input("욕실 길이 L (가로, 밑변)", min_value=400, step=10, value=2100)
-            W = st.number_input("욕실 폭   W (세로)",       min_value=400, step=10, value=1400)
+            L = st.number_input(
+                "욕실 길이 L (가로, 밑변)", min_value=400, step=10, value=2100
+            )
+            W = st.number_input(
+                "욕실 폭   W (세로)", min_value=400, step=10, value=1400
+            )
 
     st.header("④ 관리비율 설정")
-    prod_rate_pct = st.number_input("생산관리비율 rₚ (%)", min_value=0.0, max_value=99.9, value=25.0, step=0.5)
-    sales_rate_pct = st.number_input("영업관리비율 rₛ (%)", min_value=0.0, max_value=30.0, value=20.0, step=0.5)
+    prod_rate_pct = st.number_input(
+        "생산관리비율 rₚ (%)", min_value=0.0, max_value=99.9, value=25.0, step=0.5
+    )
+    sales_rate_pct = st.number_input(
+        "영업관리비율 rₛ (%)", min_value=0.0, max_value=30.0, value=20.0, step=0.5
+    )
     r_p = prod_rate_pct / 100.0
     r_s = sales_rate_pct / 100.0
 
@@ -90,9 +124,23 @@ with st.sidebar:
 # =========================================
 # Helpers: Data
 # =========================================
-REQ_COLS = ["소재","유형","형태","용도","경계","욕실폭","욕실길이",
-            "세면부폭","세면부길이","샤워부폭","샤워부길이",
-            "세면부바닥판 단가","샤워부바닥판 단가","소계"]
+REQ_COLS = [
+    "소재",
+    "유형",
+    "형태",
+    "용도",
+    "경계",
+    "욕실폭",
+    "욕실길이",
+    "세면부폭",
+    "세면부길이",
+    "샤워부폭",
+    "샤워부길이",
+    "세면부바닥판 단가",
+    "샤워부바닥판 단가",
+    "소계",
+]
+
 
 def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -102,21 +150,30 @@ def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = np.nan
 
     # 텍스트 표준화
-    df["유형"]  = df["유형"].astype(str).str.strip()
-    df["형태"]  = df["형태"].astype(str).str.strip().replace({"샤각형":"사각형"})
-    df["용도"]  = df["용도"].astype(str).str.strip()
+    df["유형"] = df["유형"].astype(str).str.strip()
+    df["형태"] = df["형태"].astype(str).str.strip().replace({"샤각형": "사각형"})
+    df["용도"] = df["용도"].astype(str).str.strip()
     if "경계" in df.columns:
-        df["경계"]  = df["경계"].astype(str).str.strip()
+        df["경계"] = df["경계"].astype(str).str.strip()
 
     # 숫자 컬럼 정규화
-    num_cols = ["욕실폭","욕실길이","세면부폭","세면부길이","샤워부폭","샤워부길이",
-                "세면부바닥판 단가","샤워부바닥판 단가","소계"]
+    num_cols = [
+        "욕실폭",
+        "욕실길이",
+        "세면부폭",
+        "세면부길이",
+        "샤워부폭",
+        "샤워부길이",
+        "세면부바닥판 단가",
+        "샤워부바닥판 단가",
+        "소계",
+    ]
     for c in num_cols:
         df[c] = (
             df[c]
             .astype(str)
             .str.replace(",", "", regex=False)
-            .replace({"nan":np.nan,"NaN":np.nan,"None":np.nan,"":np.nan})
+            .replace({"nan": np.nan, "NaN": np.nan, "None": np.nan, "": np.nan})
         )
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
@@ -141,26 +198,59 @@ def get_pve_process_cost(df_cost: pd.DataFrame) -> Optional[int]:
         elif cs in ["시공비", "금액", "Cost"]:
             col_map["시공비"] = c
 
-    if not {"항목","공정","시공비"}.issubset(col_map.keys()):
+    if not {"항목", "공정", "시공비"}.issubset(col_map.keys()):
         return None
 
     def _clean_num(x):
-        if pd.isna(x): return None
+        if pd.isna(x):
+            return None
         s = str(x).replace(",", "").strip()
-        try: return int(float(s))
-        except: return None
+        try:
+            return int(float(s))
+        except:
+            return None
 
     df["__항목"] = df[col_map["항목"]].astype(str).str.strip()
     df["__공정"] = df[col_map["공정"]].astype(str).str.strip()
     df["__시공비"] = df[col_map["시공비"]].apply(_clean_num)
 
     hit = df[
-        (df["__항목"] == "바닥판") &
-        (df["__공정"].str.contains("PVE", case=False, na=False))
+        (df["__항목"] == "바닥판")
+        & (df["__공정"].str.contains("PVE", case=False, na=False))
     ]
 
     vals = hit["__시공비"].dropna()
     return int(vals.iloc[0]) if not vals.empty else None
+
+
+@st.cache_data
+def load_floor_panel_data(file_data: bytes) -> Tuple[pd.DataFrame, Optional[int]]:
+    """
+    바닥판 엑셀 파일을 로드하고 정규화합니다.
+    Streamlit cache를 사용하여 반복 로딩을 방지합니다.
+
+    Args:
+        file_data: 업로드된 파일의 바이트 데이터
+
+    Returns:
+        (정규화된 바닥판 DataFrame, PVE 시공비 또는 None)
+    """
+    xls = pd.ExcelFile(file_data)
+
+    missing_sheets = [s for s in ["바닥판", "시공비"] if s not in xls.sheet_names]
+    if missing_sheets:
+        raise ValueError(f"필수 시트 누락: {missing_sheets}")
+
+    df_raw = pd.read_excel(xls, sheet_name="바닥판")
+    df = normalize_df(df_raw)
+
+    try:
+        df_cost = pd.read_excel(xls, sheet_name="시공비")
+        pve_process_cost = get_pve_process_cost(df_cost)
+    except Exception:
+        pve_process_cost = None
+
+    return df, pve_process_cost
 
 
 def exact_series(s: pd.Series, v: Optional[float]) -> pd.Series:
@@ -168,10 +258,13 @@ def exact_series(s: pd.Series, v: Optional[float]) -> pd.Series:
         return pd.Series(True, index=s.index)
     return (~s.isna()) & (s.astype(float) == float(v))
 
+
 # =========================================
 # Helpers: Matching + Pricing
 # =========================================
-def compute_subtotal_from_row(row: pd.Series) -> Tuple[Optional[int], Optional[int], int]:
+def compute_subtotal_from_row(
+    row: pd.Series,
+) -> Tuple[Optional[int], Optional[int], int]:
     """행에서 세면/샤워 단가 및 소계 계산."""
     sink = row.get("세면부바닥판 단가", np.nan)
     shower = row.get("샤워부바닥판 단가", np.nan)
@@ -190,11 +283,12 @@ def compute_subtotal_from_row(row: pd.Series) -> Tuple[Optional[int], Optional[i
     # 그래도 없으면 0
     return sink_v, shower_v, 0
 
-def price_blocks_pve(subtotal:int, r_p:float, r_s:float) -> Dict[str,int]:
+
+def price_blocks_pve(subtotal: int, r_p: float, r_s: float) -> Dict[str, int]:
     """PVE: 생산관리비 비포함(단순 곱), 영업관리비 포함역산."""
-    prod_fee   = int(round(subtotal * r_p))
-    prod_incl  = int(round(subtotal + prod_fee))
-    sales_fee  = int(round(prod_incl/(1.0 - r_s) - prod_incl)) if r_s > 0 else 0
+    prod_fee = int(round(subtotal * r_p))
+    prod_incl = int(round(subtotal + prod_fee))
+    sales_fee = int(round(prod_incl / (1.0 - r_s) - prod_incl)) if r_s > 0 else 0
     sales_incl = int(round(prod_incl + sales_fee))
     return {
         "생산관리비": prod_fee,
@@ -203,13 +297,14 @@ def price_blocks_pve(subtotal:int, r_p:float, r_s:float) -> Dict[str,int]:
         "영업관리비포함": sales_incl,
     }
 
-def price_blocks_grp_frp(subtotal:int, r_p:float, r_s:float) -> Dict[str,int]:
+
+def price_blocks_grp_frp(subtotal: int, r_p: float, r_s: float) -> Dict[str, int]:
     """GRP/FRP: 생산관리비 포함역산, 영업관리비 포함역산."""
     if r_p >= 1.0:
         raise ZeroDivisionError("생산관리비율은 100% 미만이어야 합니다.")
     prod_incl = int(round(subtotal / (1.0 - r_p))) if r_p > 0 else int(subtotal)
-    prod_fee  = int(round(prod_incl - subtotal))
-    sales_fee = int(round(prod_incl/(1.0 - r_s) - prod_incl)) if r_s > 0 else 0
+    prod_fee = int(round(prod_incl - subtotal))
+    sales_fee = int(round(prod_incl / (1.0 - r_s) - prod_incl)) if r_s > 0 else 0
     sales_incl = int(round(prod_incl + sales_fee))
     return {
         "생산관리비": prod_fee,
@@ -218,7 +313,15 @@ def price_blocks_grp_frp(subtotal:int, r_p:float, r_s:float) -> Dict[str,int]:
         "영업관리비포함": sales_incl,
     }
 
-def pve_quote(W:int, L:int, is_access:bool, r_p:float, r_s:float, pve_process_cost:Optional[int]) -> Dict[str,int|str]:
+
+def pve_quote(
+    W: int,
+    L: int,
+    is_access: bool,
+    r_p: float,
+    r_s: float,
+    pve_process_cost: Optional[int],
+) -> Dict[str, int | str]:
     """PVE 원가 산정 + 관리비 블록."""
     add = 480 if is_access else 380
     Wm = (W + add) / 1000.0
@@ -233,19 +336,29 @@ def pve_quote(W:int, L:int, is_access:bool, r_p:float, r_s:float, pve_process_co
         "원재료비": raw,
         "가공비": process,
         "소계": subtotal,
-        **blocks
+        **blocks,
     }
 
-def match_exact(df: pd.DataFrame,
-                user_type:str, shape:str, usage:str, boundary:Optional[str],
-                W:int, L:int,
-                sw:Optional[int], sl:Optional[int], shw:Optional[int], shl:Optional[int]) -> Optional[pd.Series]:
+
+def match_exact(
+    df: pd.DataFrame,
+    user_type: str,
+    shape: str,
+    usage: str,
+    boundary: Optional[str],
+    W: int,
+    L: int,
+    sw: Optional[int],
+    sl: Optional[int],
+    shw: Optional[int],
+    shl: Optional[int],
+) -> Optional[pd.Series]:
     """완전일치 매칭 규칙:
-       공통키: 유형, 형태, 용도, 경계(사각형), 욕실폭, 욕실길이
-       기본형(경계있음): + (세면부폭, 세면부길이, 샤워부폭, 샤워부길이)
-       기본형(경계없음)/중앙배수: 욕실폭, 욕실길이만 일치
+    공통키: 유형, 형태, 용도, 경계(사각형), 욕실폭, 욕실길이
+    기본형(경계있음): + (세면부폭, 세면부길이, 샤워부폭, 샤워부길이)
+    기본형(경계없음)/중앙배수: 욕실폭, 욕실길이만 일치
     """
-    base = df[(df["유형"]==user_type) & (df["형태"]==shape) & (df["용도"]==usage)]
+    base = df[(df["유형"] == user_type) & (df["형태"] == shape) & (df["용도"] == usage)]
 
     # 사각형의 경우 경계 컬럼도 확인
     if shape == "사각형" and boundary is not None:
@@ -260,8 +373,10 @@ def match_exact(df: pd.DataFrame,
     if user_type == "기본형" and sw is not None:
         # 세면/샤워도 완전일치
         for col, val in [
-            ("세면부폭", sw), ("세면부길이", sl),
-            ("샤워부폭", shw), ("샤워부길이", shl)
+            ("세면부폭", sw),
+            ("세면부길이", sl),
+            ("샤워부폭", shw),
+            ("샤워부길이", shl),
         ]:
             c = c & exact_series(base[col], val)
 
@@ -273,21 +388,21 @@ def match_exact(df: pd.DataFrame,
     return hit2.iloc[0]
 
 
-def find_replacement_integrated(df: pd.DataFrame, material: str,
-                               shape: str, usage: str,
-                               W: int, L: int) -> Optional[Dict[str, Any]]:
+def find_replacement_integrated(
+    df: pd.DataFrame, material: str, shape: str, usage: str, W: int, L: int
+) -> Optional[Dict[str, Any]]:
     """
     GRP 기본형 매칭 성공 후, 같은 욕실 크기(W, L)의 GRP 일체형 찾기.
     찾으면 일체형으로 대체.
     """
     # 같은 욕실 크기의 일체형 찾기
     alt_df = df[
-        (df["소재"] == material) &
-        (df["유형"] == "일체형") &
-        (df["형태"] == shape) &
-        (df["용도"] == usage) &
-        (exact_series(df["욕실폭"], W)) &
-        (exact_series(df["욕실길이"], L))
+        (df["소재"] == material)
+        & (df["유형"] == "일체형")
+        & (df["형태"] == shape)
+        & (df["용도"] == usage)
+        & (exact_series(df["욕실폭"], W))
+        & (exact_series(df["욕실길이"], L))
     ]
 
     if alt_df.empty:
@@ -304,21 +419,23 @@ def find_replacement_integrated(df: pd.DataFrame, material: str,
         "세면부단가": sink,
         "샤워부단가": shower,
         "소계": subtotal,
-        "row": row
+        "row": row,
     }
+
 
 # =========================================
 # Helpers: Drawing (PIL) — 비례 스케일
 # =========================================
-def draw_rect_plan(W:int, L:int, split: Optional[int]=None,
-                   canvas_w:int=720, margin:int=18) -> Image.Image:
+def draw_rect_plan(
+    W: int, L: int, split: Optional[int] = None, canvas_w: int = 720, margin: int = 18
+) -> Image.Image:
     """사각형: 길이 L=가로(밑변), 폭 W=세로. split는 가로 기준 경계점."""
     CANVAS_W = int(canvas_w)
-    MARGIN   = int(margin)
+    MARGIN = int(margin)
 
-    sx = (CANVAS_W - 2*MARGIN) / max(1.0, float(L))
+    sx = (CANVAS_W - 2 * MARGIN) / max(1.0, float(L))
     sy = sx
-    CANVAS_H = int(W * sy + 2*MARGIN)
+    CANVAS_H = int(W * sy + 2 * MARGIN)
 
     img = Image.new("RGB", (CANVAS_W, CANVAS_H), "white")
     drw = ImageDraw.Draw(img)
@@ -337,9 +454,18 @@ def draw_rect_plan(W:int, L:int, split: Optional[int]=None,
 
     return img
 
-def draw_corner_plan(v1:int, v2:int, v3:int, v4:int, v5:int, v6:int,
-                     show_split: bool=True,
-                     canvas_w:int=720, margin:int=18) -> Image.Image:
+
+def draw_corner_plan(
+    v1: int,
+    v2: int,
+    v3: int,
+    v4: int,
+    v5: int,
+    v6: int,
+    show_split: bool = True,
+    canvas_w: int = 720,
+    margin: int = 18,
+) -> Image.Image:
     """
     코너형: 전체 L=v1(가로), W=v2(세로)
       우상단 오목부 notch 크기 = (가로 v5, 세로 v6)
@@ -347,18 +473,22 @@ def draw_corner_plan(v1:int, v2:int, v3:int, v4:int, v5:int, v6:int,
       세면/샤워 경계점(옵션)은 v3 위치에 수직선
     """
     CANVAS_W = int(canvas_w)
-    MARGIN   = int(margin)
+    MARGIN = int(margin)
 
-    sx = (CANVAS_W - 2*MARGIN) / max(1.0, float(v1))
+    sx = (CANVAS_W - 2 * MARGIN) / max(1.0, float(v1))
     sy = sx
-    CANVAS_H = int(v2 * sy + 2*MARGIN)
+    CANVAS_H = int(v2 * sy + 2 * MARGIN)
 
     img = Image.new("RGB", (CANVAS_W, CANVAS_H), "white")
     drw = ImageDraw.Draw(img)
 
     x0, y0 = MARGIN, MARGIN
-    def X(mm): return int(round(x0 + mm * sx))
-    def Y(mm): return int(round(y0 + mm * sy))
+
+    def X(mm):
+        return int(round(x0 + mm * sx))
+
+    def Y(mm):
+        return int(round(y0 + mm * sy))
 
     # 전체 외곽
     drw.rectangle([X(0), Y(0), X(v1), Y(v2)], outline="black", width=3)
@@ -367,16 +497,22 @@ def draw_corner_plan(v1:int, v2:int, v3:int, v4:int, v5:int, v6:int,
     notch_x0, notch_x1 = v1 - v5, v1
     notch_y0, notch_y1 = 0, v6
     # 내부 지우기(흰색)
-    drw.rectangle([X(notch_x0), Y(notch_y0), X(notch_x1), Y(notch_y1)],
-                  fill="white", outline="white")
+    drw.rectangle(
+        [X(notch_x0), Y(notch_y0), X(notch_x1), Y(notch_y1)],
+        fill="white",
+        outline="white",
+    )
     # 오목 경계선(수직) 표시
-    drw.line([X(notch_x0), Y(0),     X(notch_x0), Y(v6)], fill="black", width=3)
+    drw.line([X(notch_x0), Y(0), X(notch_x0), Y(v6)], fill="black", width=3)
 
     # 2) 샤워부(오른쪽 하단) : 오목부와 동일 치수 (가로 v5, 세로 v6)
     shower_x0, shower_x1 = v1 - v5, v1
     shower_y0, shower_y1 = v2 - v6, v2
-    drw.rectangle([X(shower_x0), Y(shower_y0), X(shower_x1), Y(shower_y1)],
-                  outline="blue", width=3)
+    drw.rectangle(
+        [X(shower_x0), Y(shower_y0), X(shower_x1), Y(shower_y1)],
+        outline="blue",
+        width=3,
+    )
 
     # (선택) 세면/샤워 경계점: v3 위치 수직선
     if show_split:
@@ -389,33 +525,21 @@ def draw_corner_plan(v1:int, v2:int, v3:int, v4:int, v5:int, v6:int,
 # Execution
 # =========================================
 if not uploaded:
-    st.info("왼쪽에서 엑셀 파일(시트: **바닥판**, **시공비**)을 업로드한 뒤 **계산하기**를 눌러주세요.")
+    st.info(
+        "왼쪽에서 엑셀 파일(시트: **바닥판**, **시공비**)을 업로드한 뒤 **계산하기**를 눌러주세요."
+    )
     st.stop()
 
-# 엑셀 로딩
+# 엑셀 로딩 (캐시된 파싱 사용)
 try:
-    xls = pd.ExcelFile(uploaded)
+    file_bytes = uploaded.read()
+    df, pve_process_cost = load_floor_panel_data(file_bytes)
+except ValueError as e:
+    st.error(f"필수 시트 누락: {e} — 엑셀을 확인하세요.")
+    st.stop()
 except Exception as e:
-    st.error(f"엑셀 로딩 실패: {e}")
+    st.error(f"엑셀 파싱 실패: {e}")
     st.stop()
-
-missing_sheets = [s for s in ["바닥판","시공비"] if s not in xls.sheet_names]
-if missing_sheets:
-    st.error(f"필수 시트 누락: {missing_sheets} — 엑셀을 확인하세요.")
-    st.stop()
-
-try:
-    df_raw = pd.read_excel(xls, sheet_name="바닥판")
-    df = normalize_df(df_raw)
-except Exception as e:
-    st.error(f"'바닥판' 시트 파싱 실패: {e}")
-    st.stop()
-
-try:
-    df_cost = pd.read_excel(xls, sheet_name="시공비")
-    pve_process_cost = get_pve_process_cost(df_cost)   # 못 찾으면 None
-except Exception:
-    pve_process_cost = None
 
 if do_calc:
     # 입력 유효성
@@ -430,7 +554,9 @@ if do_calc:
     # 완전일치 매칭 시 필요한 치수 누락 검사
     # 구분 선택 시 세면/샤워 치수 필요
     if boundary == "구분" and (sw is None or sl is None or shw is None or shl is None):
-        st.error("경계 구분 선택 시 세면/샤워 치수가 필요합니다. 사이드바에서 경계 정보를 확인하세요.")
+        st.error(
+            "경계 구분 선택 시 세면/샤워 치수가 필요합니다. 사이드바에서 경계 정보를 확인하세요."
+        )
         st.stop()
 
     decision_log = []
@@ -440,45 +566,105 @@ if do_calc:
     # 0) 세대수<100 ⇒ PVE 절대 우선
     if units < 100:
         decision_log.append(f"세대수={units} (<100) → PVE 강제 선택")
-        pve = pve_quote(W, L, is_access=(is_access=="예(주거약자)"), r_p=r_p, r_s=r_s, pve_process_cost=pve_process_cost)
+        pve = pve_quote(
+            W,
+            L,
+            is_access=(is_access == "예(주거약자)"),
+            r_p=r_p,
+            r_s=r_s,
+            pve_process_cost=pve_process_cost,
+        )
         result = {
-            "소재":"PVE", "세면부단가":None, "샤워부단가":None, "소계":pve["소계"],
-            "생산관리비":pve["생산관리비"], "생산관리비포함":pve["생산관리비포함"],
-            "영업관리비":pve["영업관리비"], "영업관리비포함":pve["영업관리비포함"]
+            "소재": "PVE",
+            "세면부단가": None,
+            "샤워부단가": None,
+            "소계": pve["소계"],
+            "생산관리비": pve["생산관리비"],
+            "생산관리비포함": pve["생산관리비포함"],
+            "영업관리비": pve["영업관리비"],
+            "영업관리비포함": pve["영업관리비포함"],
         }
     else:
         # 1) GRP 매칭 (경계 조건 기반)
         boundary_val = boundary if boundary == "구분" else None
-        r = match_exact(df[df["소재"].astype(str).str.startswith("GRP", na=False)],
-                        user_type, shape, usage, boundary_val, W, L, sw, sl, shw, shl)
+        r = match_exact(
+            df[df["소재"].astype(str).str.startswith("GRP", na=False)],
+            user_type,
+            shape,
+            usage,
+            boundary_val,
+            W,
+            L,
+            sw,
+            sl,
+            shw,
+            shl,
+        )
 
         if r is not None:
             decision_log.append("GRP 기본형 매칭 성공 (완전일치)")
 
             # ★ 핵심: GRP 기본형 매칭 성공 후, 같은 욕실 크기의 GRP 일체형이 있는지 확인
-            integrated_match = find_replacement_integrated(df, "GRP", shape, usage, W, L)
+            integrated_match = find_replacement_integrated(
+                df, "GRP", shape, usage, W, L
+            )
             if integrated_match is not None:
-                decision_log.append(f"같은 욕실 크기의 GRP 일체형 발견 → 일체형으로 대체")
+                decision_log.append(
+                    f"같은 욕실 크기의 GRP 일체형 발견 → 일체형으로 대체"
+                )
                 selected_alternative = integrated_match
                 matched_user_type = "일체형"
-                sink, shower, subtotal = integrated_match["세면부단가"], integrated_match["샤워부단가"], integrated_match["소계"]
+                sink, shower, subtotal = (
+                    integrated_match["세면부단가"],
+                    integrated_match["샤워부단가"],
+                    integrated_match["소계"],
+                )
                 pb = price_blocks_grp_frp(subtotal, r_p, r_s)
-                result = {"소재":"GRP", "세면부단가":sink, "샤워부단가":shower, "소계":subtotal, **pb}
+                result = {
+                    "소재": "GRP",
+                    "세면부단가": sink,
+                    "샤워부단가": shower,
+                    "소계": subtotal,
+                    **pb,
+                }
             else:
                 # 일체형 없으면 기본형 그대로 사용
                 sink, shower, subtotal = compute_subtotal_from_row(r)
                 pb = price_blocks_grp_frp(subtotal, r_p, r_s)
-                result = {"소재":"GRP", "세면부단가":sink, "샤워부단가":shower, "소계":subtotal, **pb}
+                result = {
+                    "소재": "GRP",
+                    "세면부단가": sink,
+                    "샤워부단가": shower,
+                    "소계": subtotal,
+                    **pb,
+                }
         else:
             decision_log.append("GRP 매칭 실패 → FRP 탐색")
             # 2) FRP 매칭
-            r = match_exact(df[df["소재"]=="FRP"],
-                            user_type, shape, usage, boundary_val, W, L, sw, sl, shw, shl)
+            r = match_exact(
+                df[df["소재"] == "FRP"],
+                user_type,
+                shape,
+                usage,
+                boundary_val,
+                W,
+                L,
+                sw,
+                sl,
+                shw,
+                shl,
+            )
             if r is not None:
                 decision_log.append("FRP 매칭 성공 (완전일치)")
                 sink, shower, subtotal = compute_subtotal_from_row(r)
                 pb = price_blocks_grp_frp(subtotal, r_p, r_s)
-                result = {"소재":"FRP", "세면부단가":sink, "샤워부단가":shower, "소계":subtotal, **pb}
+                result = {
+                    "소재": "FRP",
+                    "세면부단가": sink,
+                    "샤워부단가": shower,
+                    "소계": subtotal,
+                    **pb,
+                }
             else:
                 decision_log.append("FRP 매칭 실패")
                 # 3) 중앙배수는 매칭 실패해도 PVE로
@@ -486,11 +672,23 @@ if do_calc:
                     decision_log.append("유형=중앙배수 → 매칭 실패로 PVE 계산")
                 else:
                     decision_log.append("GRP/FRP 모두 매칭 실패 → PVE 계산")
-                pve = pve_quote(W, L, is_access=(is_access=="예(주거약자)"), r_p=r_p, r_s=r_s, pve_process_cost=pve_process_cost)
+                pve = pve_quote(
+                    W,
+                    L,
+                    is_access=(is_access == "예(주거약자)"),
+                    r_p=r_p,
+                    r_s=r_s,
+                    pve_process_cost=pve_process_cost,
+                )
                 result = {
-                    "소재":"PVE", "세면부단가":None, "샤워부단가":None, "소계":pve["소계"],
-                    "생산관리비":pve["생산관리비"], "생산관리비포함":pve["생산관리비포함"],
-                    "영업관리비":pve["영업관리비"], "영업관리비포함":pve["영업관리비포함"]
+                    "소재": "PVE",
+                    "세면부단가": None,
+                    "샤워부단가": None,
+                    "소계": pve["소계"],
+                    "생산관리비": pve["생산관리비"],
+                    "생산관리비포함": pve["생산관리비포함"],
+                    "영업관리비": pve["영업관리비"],
+                    "영업관리비포함": pve["영업관리비포함"],
                 }
 
     # =========================================
@@ -501,46 +699,80 @@ if do_calc:
         img = draw_rect_plan(W=W, L=L, split=(split if split is not None else None))
     else:
         img = draw_corner_plan(
-            v1=L, v2=W, v3=(sl if boundary == "구분" else 0),
+            v1=L,
+            v2=W,
+            v3=(sl if boundary == "구분" else 0),
             v4=(W - (shw if boundary == "구분" else 0)),
             v5=(shl if boundary == "구분" else 0),
             v6=(shw if boundary == "구분" else 0),
-            show_split=(boundary == "구분")
+            show_split=(boundary == "구분"),
         )
     st.image(img, caption=f"{shape} (L={L}mm, W={W}mm)", use_container_width=False)
-    st.caption("※ 사각형: 길이 L=가로(밑변), 폭 W=세로 스케일 비례 렌더링 / 코너형: 우상단 오목부를 파내어 표기")
+    st.caption(
+        "※ 사각형: 길이 L=가로(밑변), 폭 W=세로 스케일 비례 렌더링 / 코너형: 우상단 오목부를 파내어 표기"
+    )
 
     # 결과를 도면 아래쪽으로 이동
     st.markdown("---")
     st.subheader("매칭·단가 결과")
-    st.write(f"**세대수**: {units}")
 
     # 대체 매칭된 경우 표시
     display_type = user_type
     if selected_alternative is not None:
         display_type = f"{user_type} → {matched_user_type} (대체)"
 
-    st.write(f"**유형/형태/용도**: {display_type} / {shape} / {usage}")
-    st.write(f"**치수**: L={L:,} mm, W={W:,} mm")
-    if boundary == "구분" and (sw is not None and sl is not None and shw is not None and shl is not None):
-        st.write(f"**세면부**: 폭={sw:,} mm, 길이={sl:,} mm")
-        st.write(f"**샤워부**: 폭={shw:,} mm, 길이={shl:,} mm")
+    # 결과를 딕셔너리 리스트로 구성
+    result_data = [
+        {"항목": "세대수", "값": str(units)},
+        {"항목": "유형/형태/용도", "값": f"{display_type} / {shape} / {usage}"},
+        {"항목": "치수", "값": f"L={L:,} mm, W={W:,} mm"},
+    ]
 
-    st.write(f"**소재(선택)**: {result['소재']}")
+    # 경계 구분 시 세면/샤워 치수 추가
+    if boundary == "구분" and (
+        sw is not None and sl is not None and shw is not None and shl is not None
+    ):
+        result_data.append({"항목": "세면부", "값": f"폭={sw:,} mm, 길이={sl:,} mm"})
+        result_data.append({"항목": "샤워부", "값": f"폭={shw:,} mm, 길이={shl:,} mm"})
+
+    # 단가 정보
+    result_data.append({"항목": "소재(선택)", "값": result["소재"]})
+
     if result["세면부단가"] is not None:
-        st.write(f"**세면부바닥판 단가**: {result['세면부단가']:,} 원")
+        result_data.append(
+            {"항목": "세면부바닥판 단가", "값": f"{result['세면부단가']:,} 원"}
+        )
     if result["샤워부단가"] is not None:
-        st.write(f"**샤워부바닥판 단가**: {result['샤워부단가']:,} 원")
+        result_data.append(
+            {"항목": "샤워부바닥판 단가", "값": f"{result['샤워부단가']:,} 원"}
+        )
 
-    st.write(f"**소계**: {result['소계']:,} 원")
-    st.write(f"**생산관리비({prod_rate_pct:.1f}%)**: {result['생산관리비']:,} 원")
-    st.write(f"**생산관리비 포함**: {result['생산관리비포함']:,} 원")
-    st.write(f"**영업관리비({sales_rate_pct:.1f}%)**: {result['영업관리비']:,} 원")
-    st.write(f"**영업관리비 포함(최종)**: {result['영업관리비포함']:,} 원")
+    result_data.extend(
+        [
+            {"항목": "소계", "값": f"{result['소계']:,} 원"},
+            {
+                "항목": f"생산관리비({prod_rate_pct:.1f}%)",
+                "값": f"{result['생산관리비']:,} 원",
+            },
+            {"항목": "생산관리비 포함", "값": f"{result['생산관리비포함']:,} 원"},
+            {
+                "항목": f"영업관리비({sales_rate_pct:.1f}%)",
+                "값": f"{result['영업관리비']:,} 원",
+            },
+            {"항목": "영업관리비 포함(최종)", "값": f"{result['영업관리비포함']:,} 원"},
+        ]
+    )
+
+    # 표로 표시
+    result_df = pd.DataFrame(result_data)
+    st.dataframe(result_df, use_container_width=True, hide_index=True)
 
     st.info("의사결정 로그", icon="ℹ️")
-    st.write("\n".join([f"- {x}" for x in decision_log]))
-
+    # 의사결정 로그를 표로 변환
+    log_df = pd.DataFrame(
+        [{"단계": i + 1, "결정": msg} for i, msg in enumerate(decision_log)]
+    )
+    st.dataframe(log_df, use_container_width=True, hide_index=True)
 
     # ====== floor.json 저장 + 다운로드 버튼 ======
     # 결과 payload 구성(요청 필드명에 맞춤 매핑)
@@ -554,14 +786,18 @@ if do_calc:
         "세면부길이": int(sl) if sl is not None else None,
         "샤워부폭": int(shw) if shw is not None else None,
         "샤워부길이": int(shl) if shl is not None else None,
-        "세면부바닥판 단가": (int(result["세면부단가"]) if result.get("세면부단가") is not None else None),
-        "샤워부바닥판 단가": (int(result["샤워부단가"]) if result.get("샤워부단가") is not None else None),
+        "세면부바닥판 단가": (
+            int(result["세면부단가"]) if result.get("세면부단가") is not None else None
+        ),
+        "샤워부바닥판 단가": (
+            int(result["샤워부단가"]) if result.get("샤워부단가") is not None else None
+        ),
         "소계": int(result["소계"]),
         "생산관리비": int(result["생산관리비"]),
         "생산관리비포함단가": int(result["생산관리비포함"]),
         "영업관리비": int(result["영업관리비"]),
         "영업관리비포함단가": int(result["영업관리비포함"]),
-        }
+    }
 
     # 파일 저장
     try:
@@ -578,7 +814,7 @@ if do_calc:
         file_name="floor.json",
         mime="application/json",
         type="primary",
-        )
+    )
 
     # (선택) 화면에서 JSON 미리보기
     st.caption("저장된 JSON 미리보기")

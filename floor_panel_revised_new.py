@@ -1,69 +1,23 @@
-# floor_panel_final.py
+# app.py
 # -*- coding: utf-8 -*-
-# Floor base (바닥판) matching + costing + plan preview (사각/코너) + 통합 플랫폼 연동
+# Floor base (바닥판) matching + costing + plan preview (사각/코너)
+# 실행: streamlit run app.py
 
 from __future__ import annotations
 import io
-import os
-import json
-from datetime import datetime
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+import json
 from PIL import Image, ImageDraw
-
-# --- Common Styles ---
-from common_styles import apply_common_styles, set_page_config
-
-# --- Authentication ---
-import auth
-
-# =========================================
-# Page Configuration
-# =========================================
-set_page_config(page_title="바닥판 계산 프로그램 (통합)", layout="wide")
-apply_common_styles()
-auth.require_auth()
-
-# =========================================
-# Session State Keys
-# =========================================
-EXPORT_DIR = "exports"
-os.makedirs(EXPORT_DIR, exist_ok=True)
-
-FLOOR_DONE_KEY = "floor_done"
-FLOOR_RESULT_KEY = "floor_result"
-CEIL_DONE_KEY = "ceil_done"
-CEIL_RESULT_KEY = "ceil_result"
-WALL_DONE_KEY = "wall_done"
-WALL_RESULT_KEY = "wall_result"
-
-# 공유 데이터 키
-SHARED_EXCEL_KEY = "shared_excel_file"
-SHARED_EXCEL_NAME_KEY = "shared_excel_filename"
-SHARED_BATH_SHAPE_KEY = "shared_bath_shape"
-SHARED_BATH_WIDTH_KEY = "shared_bath_width"
-SHARED_BATH_LENGTH_KEY = "shared_bath_length"
-SHARED_SINK_WIDTH_KEY = "shared_sink_width"
-SHARED_SINK_LENGTH_KEY = "shared_sink_length"
-SHARED_SHOWER_WIDTH_KEY = "shared_shower_width"
-SHARED_SHOWER_LENGTH_KEY = "shared_shower_length"
-SHARED_MATERIAL_KEY = "shared_floor_material"
-
-# =========================================
-# Utility Functions
-# =========================================
-def _save_json(path: str, data: dict):
-    """JSON 파일 저장"""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 # =========================================
 # App & Sidebar
 # =========================================
-st.title("바닥판 계산 프로그램 (통합)")
+st.set_page_config(page_title="바닥판 매칭·단가 산출 + 도면 미리보기", layout="wide")
+st.title("바닥판 매칭·단가 산출 (GRP→FRP→PVE) + 도면 미리보기")
 
 with st.sidebar:
     st.header("① 데이터 업로드")
@@ -383,7 +337,7 @@ def draw_rect_plan(W:int, L:int, split: Optional[int]=None,
 
     return img
 
-def draw_corner_plan(v1:int, v2:int, v3:int, v5:int, v6:int,
+def draw_corner_plan(v1:int, v2:int, v3:int, v4:int, v5:int, v6:int,
                      show_split: bool=True,
                      canvas_w:int=720, margin:int=18) -> Image.Image:
     """
@@ -437,11 +391,6 @@ def draw_corner_plan(v1:int, v2:int, v3:int, v5:int, v6:int,
 if not uploaded:
     st.info("왼쪽에서 엑셀 파일(시트: **바닥판**, **시공비**)을 업로드한 뒤 **계산하기**를 눌러주세요.")
     st.stop()
-
-# 엑셀 파일을 세션에 저장 (다른 페이지에서 재사용)
-if uploaded is not None:
-    st.session_state[SHARED_EXCEL_KEY] = uploaded
-    st.session_state[SHARED_EXCEL_NAME_KEY] = uploaded.name
 
 # 엑셀 로딩
 try:
@@ -553,6 +502,7 @@ if do_calc:
     else:
         img = draw_corner_plan(
             v1=L, v2=W, v3=(sl if boundary == "구분" else 0),
+            v4=(W - (shw if boundary == "구분" else 0)),
             v5=(shl if boundary == "구분" else 0),
             v6=(shw if boundary == "구분" else 0),
             show_split=(boundary == "구분")
@@ -591,21 +541,9 @@ if do_calc:
     st.info("의사결정 로그", icon="ℹ️")
     st.write("\n".join([f"- {x}" for x in decision_log]))
 
-    # =========================================
-    # 세션 상태 저장 및 공유 데이터 설정
-    # =========================================
 
-    # 욕실 정보를 다른 페이지에서 사용할 수 있도록 저장
-    st.session_state[SHARED_BATH_SHAPE_KEY] = shape
-    st.session_state[SHARED_BATH_WIDTH_KEY] = W
-    st.session_state[SHARED_BATH_LENGTH_KEY] = L
-    st.session_state[SHARED_SINK_WIDTH_KEY] = sw
-    st.session_state[SHARED_SINK_LENGTH_KEY] = sl
-    st.session_state[SHARED_SHOWER_WIDTH_KEY] = shw
-    st.session_state[SHARED_SHOWER_LENGTH_KEY] = shl
-    st.session_state[SHARED_MATERIAL_KEY] = result["소재"]
-
-    # 바닥판 결과 저장
+    # ====== floor.json 저장 + 다운로드 버튼 ======
+    # 결과 payload 구성(요청 필드명에 맞춤 매핑)
     floor_payload = {
         "소재": result["소재"],
         "유형": display_type,
@@ -623,58 +561,28 @@ if do_calc:
         "생산관리비포함단가": int(result["생산관리비포함"]),
         "영업관리비": int(result["영업관리비"]),
         "영업관리비포함단가": int(result["영업관리비포함"]),
-    }
+        }
 
-    # 세션 상태에 결과 저장
-    st.session_state[FLOOR_RESULT_KEY] = {
-        "section": "floor",
-        "inputs": {
-            "units": units,
-            "user_type": user_type,
-            "shape": shape,
-            "usage": usage,
-            "is_access": is_access,
-            "boundary": boundary,
-            "W": W,
-            "L": L,
-            "sw": sw,
-            "sl": sl,
-            "shw": shw,
-            "shl": shl,
-            "r_p": r_p,
-            "r_s": r_s,
-        },
-        "result": floor_payload,
-        "decision_log": decision_log,
-    }
-    st.session_state[FLOOR_DONE_KEY] = True
+    # 파일 저장
+    try:
+        with open("floor.json", "w", encoding="utf-8") as f:
+            json.dump(floor_payload, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"floor.json 저장 실패: {e}")
 
-    # JSON 파일로 저장
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    json_filename = f"floor_{timestamp}.json"
-    json_path = os.path.join(EXPORT_DIR, json_filename)
-    _save_json(json_path, st.session_state[FLOOR_RESULT_KEY])
-
-    # 다운로드 버튼
-    st.markdown("---")
+    # 2) Streamlit에서 즉시 다운로드도 가능하도록
     json_bytes = json.dumps(floor_payload, ensure_ascii=False, indent=2).encode("utf-8")
     st.download_button(
-        label="📥 floor.json 다운로드",
+        label="floor.json 다운로드",
         data=json_bytes,
         file_name="floor.json",
         mime="application/json",
         type="primary",
-    )
+        )
 
     # (선택) 화면에서 JSON 미리보기
-    with st.expander("📄 저장된 JSON 미리보기", expanded=False):
-        st.json(floor_payload)
+    st.caption("저장된 JSON 미리보기")
+    st.json(floor_payload)
+    # ============================================
 
-    st.success("✅ 계산 완료")
-
-    # 다음 단계 안내
-    st.info("""
-    **다음 단계**: 벽판 계산을 진행하세요.
-
-    좌측 사이드바에서 **벽판 계산** 페이지로 이동하여 계산을 진행할 수 있습니다.
-    """)
+    st.success("계산 완료 ✅")

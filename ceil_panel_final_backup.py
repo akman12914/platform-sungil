@@ -1,58 +1,19 @@
 # -*- coding: utf-8 -*-
 # 통합: 천장판 계산 UI + 엔진 + 엑셀 카탈로그 로딩 + m×n 확장설치 + 도면/행렬 스케치 + 표 + JSON
-# 역이식: 다운로드 파일 형식 + 인증시스템 + session state + common_styles
-# 실행: streamlit run ceil_panel_final.py
+# 실행: streamlit run ceiling_panel_app.py
 
 from __future__ import annotations
 
 import io
 import json
 import math
-import os
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Literal, Dict, Set
 from collections import Counter, defaultdict
-from datetime import datetime
 
 import streamlit as st
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
-
-# --- Common Styles ---
-from common_styles import apply_common_styles, set_page_config
-
-# --- Authentication ---
-import auth
-
-# =========================================
-# 페이지 설정 및 인증
-# =========================================
-set_page_config(page_title="천장판 계산 프로그램 (통합)", layout="wide")
-apply_common_styles()
-auth.require_auth()
-
-# =========================================
-# Session State Keys
-# =========================================
-EXPORT_DIR = "exports"
-os.makedirs(EXPORT_DIR, exist_ok=True)
-
-FLOOR_DONE_KEY = "floor_done"
-FLOOR_RESULT_KEY = "floor_result"
-
-CEIL_DONE_KEY = "ceil_done"
-CEIL_RESULT_KEY = "ceil_result"
-
-# 공유 카탈로그 세션 키 (모든 페이지에서 공통 사용)
-SHARED_EXCEL_KEY = "shared_excel_file"
-SHARED_EXCEL_NAME_KEY = "shared_excel_filename"
-
-# 공유 욕실 정보 세션 키 (바닥판에서 입력, 벽판/천장판에서 사용)
-SHARED_BATH_SHAPE_KEY = "shared_bath_shape"  # 욕실 형태: "사각형" or "코너형"
-SHARED_BATH_WIDTH_KEY = "shared_bath_width"  # 욕실 폭 (W)
-SHARED_BATH_LENGTH_KEY = "shared_bath_length"  # 욕실 길이 (L)
-SHARED_SINK_WIDTH_KEY = "shared_sink_width"  # 세면부 폭 (경계선 정보, split용)
-SHARED_MATERIAL_KEY = "shared_floor_material"  # 바닥판 재료
 
 # =========================================
 # 전역 상수
@@ -76,12 +37,6 @@ def step_floor(x: int, step: int = STEP_MM) -> int:
 def step_ceil(x: int, step: int = STEP_MM) -> int:
     v = int(x)
     return ((v + step - 1) // step) * step
-
-
-def _save_json(path: str, data: dict):
-    """JSON 파일 저장"""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 # =========================================
@@ -1558,225 +1513,66 @@ def summarize_rows(rows: List[RowPlacement]) -> Tuple[pd.DataFrame, pd.DataFrame
 
 
 # =========================================
-# UI 시작
+# UI
 # =========================================
-st.title("천장판 계산 프로그램 (UI + 엔진 통합)")
+st.set_page_config(page_title="천장판 계산 프로그램 (m×n 확장 자동)", layout="wide")
+st.title("천장판 계산 프로그램 — 가로=L / 세로=W + m×n 확장 자동")
 
-# ========== 바닥판 계산 의존성 체크 ==========
-floor_done = st.session_state.get(FLOOR_DONE_KEY, False)
-floor_result = st.session_state.get(FLOOR_RESULT_KEY)
-
-if not floor_done or not floor_result:
-    st.warning("⚠️ 천장판 계산을 진행하려면 먼저 **바닥판 계산**을 완료해야 합니다.")
-
-    # 안내 카드
-    st.markdown(
-        """
-    <div style="
-        border: 1px solid #f59e0b;
-        border-radius: 12px;
-        padding: 20px;
-        margin: 16px 0;
-        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    ">
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-            <span style="font-size: 24px;">📋</span>
-            <h3 style="margin: 0; color: #0f172a; font-weight: 700;">계산 순서 안내</h3>
-        </div>
-        <p style="margin: 0 0 12px 36px; color: #78350f; line-height: 1.6;">
-            성일 시스템은 순차적인 계산 흐름을 따릅니다:
-        </p>
-        <div style="margin-left: 36px; padding: 12px; background: white; border-radius: 8px; border: 1px solid #f59e0b;">
-            <p style="margin: 0; color: #92400e; font-size: 0.95rem; line-height: 1.6;">
-                <strong>1단계:</strong> 🟦 바닥판 계산<br>
-                <strong>2단계:</strong> 🟩 벽판 계산<br>
-                <strong>3단계:</strong> 🟨 천장판 계산 ← <em>현재 페이지</em><br>
-                <strong>4단계:</strong> 📋 견적서 생성
-            </p>
-        </div>
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
-
-    # 바닥판 계산 페이지로 이동 버튼
-    col_spacer, col_btn, col_spacer2 = st.columns([1, 2, 1])
-    with col_btn:
-        st.page_link(
-            "pages/1_바닥판_계산.py", label="🟦 바닥판 계산 시작하기", icon=None
-        )
-
-    st.stop()  # 바닥판 미완료 시 이후 UI 차단
-
-# 바닥판 완료 시 성공 메시지
-st.success("✅ 바닥판 계산이 완료되었습니다. 천장판 계산을 진행할 수 있습니다.")
-
-# -------- 카탈로그 업로드 --------
 with st.sidebar:
     st.header("천장판 데이터 로딩")
-    st.info("📂 바닥판에서 업로드한 Excel 카탈로그를 사용합니다.")
-
-    # 바닥판에서 공유된 데이터 표시
-    shared_shape = st.session_state.get(SHARED_BATH_SHAPE_KEY)
-    shared_width = st.session_state.get(SHARED_BATH_WIDTH_KEY)
-    shared_length = st.session_state.get(SHARED_BATH_LENGTH_KEY)
-    shared_sink_w = st.session_state.get(SHARED_SINK_WIDTH_KEY)
-
-    if shared_shape:
-        st.success(f"✅ 바닥판 데이터 사용 중\n- 형태: {shared_shape}\n- 폭×길이: {shared_width}×{shared_length}mm\n- 세면부 폭: {shared_sink_w}mm")
+    up = st.file_uploader("엑셀 업로드 (시트명: '천장판', 선택 시 '시공비')", type=["xlsx"])
+    st.caption("※ 카탈로그(엑셀)만 사용. (시공비 시트의 천장판/절단이 있으면 절단단가 자동 반영)")
 
     st.header("욕실유형")
-    # 바닥판 데이터가 있으면 자동 설정, 없으면 수동 선택
-    if shared_shape:
-        bath_type_map = {"사각형": "사각형 욕실", "코너형": "코너형 욕실"}
-        bath_type = bath_type_map.get(shared_shape, "사각형 욕실")
-        st.radio("욕실유형 (바닥판 자동 반영)", [bath_type], horizontal=False, disabled=True)
-    else:
-        bath_type = st.radio("욕실유형", ["사각형 욕실", "코너형 욕실"], horizontal=False)
+    bath_type = st.radio("욕실유형", ["사각형 욕실", "코너형 욕실"])
 
-    st.header("계산 옵션 / 관리비율")
+    st.header("관리비율")
+    prod_rate_pct = st.number_input("생산관리비율 rₚ(%)", 0.0, 80.0, 20.0, 0.5)
+    sales_rate_pct = st.number_input("영업관리비율 rₛ(%)", 0.0, 80.0, 20.0, 0.5)
 
-    prod_rate_pct = st.number_input("생산관리비율 rₚ (%)",
-                                    min_value=0.0, max_value=80.0,
-                                    value=20.0, step=0.5, help="예: 20 → 20%")
-    sales_rate_pct = st.number_input("영업관리비율 rₛ (%)",
-                                     min_value=0.0, max_value=80.0,
-                                     value=20.0, step=0.5, help="예: 20 → 20%")
-
-# -------- read Excel file (shared state only) ----------
-# 바닥판에서 공유된 Excel 파일 사용
-excel_file = st.session_state.get(SHARED_EXCEL_KEY)
-excel_filename = st.session_state.get(SHARED_EXCEL_NAME_KEY, "알 수 없음")
-
-if excel_file:
-    try:
-        xls = pd.ExcelFile(excel_file)
-        df_cat = pd.read_excel(xls, sheet_name="천장판")
-        BODY, SIDE, HATCH = load_catalog_from_excel(df_cat)
-
-        # 공유 카탈로그 표시
-        st.info(f"📂 공유 카탈로그 사용 중: {excel_filename} — BODY {len(BODY)}종, SIDE {len(SIDE)}종, 점검구 {len(HATCH)}종")
-
-        # 👉 시공비 시트에서 천장판 절단 단가 가져오기
-        try:
-            df_cost = pd.read_excel(xls, sheet_name="시공비")
-            df_cost["항목"] = df_cost["항목"].astype(str).str.strip()
-            df_cost["공정"] = df_cost["공정"].astype(str).str.strip()
-
-            mask = (df_cost["항목"] == "천장판") & (df_cost["공정"] == "절단")
-            if mask.any():
-                cut_val = df_cost.loc[mask, "시공비"].iloc[0]
-                if isinstance(cut_val, str):
-                    cut_val = cut_val.replace(",", "")
-                cut_val = float(cut_val)
-
-                # ★ 여기서 그냥 덮어쓰기만 하면 됨
-                CUT_COST = int(round(cut_val))
-
-                st.info(f"시공비 시트에서 천장판 절단비 {CUT_COST:,}원 로드됨")
-        except Exception as e:
-            st.warning(f"'시공비' 시트에서 천장판 절단비를 읽지 못해 기본값({CUT_COST})을 사용합니다. 상세: {e}")
-
-    except Exception as e:
-        st.error(f"엑셀 파싱 실패: {e}")
-        st.stop()
-else:
-    st.warning("⚠️ 바닥판 페이지에서 엑셀 파일을 먼저 업로드해주세요.")
-    st.info("💡 바닥판에서 업로드한 Excel 카탈로그가 천장판과 벽판에 자동으로 공유됩니다.")
+if not up:
+    st.info("엑셀 파일을 업로드하세요.")
     st.stop()
 
-# 카탈로그 확인 UI (Expander)
-with st.expander("📋 카탈로그 확인 (업로드 데이터)", expanded=False):
-    st.markdown("### 점검구 카탈로그")
-    df_check_display = pd.DataFrame(
-        [{"이름": h.name, "폭": h.w, "길이": h.l, "가격": h.price} for h in HATCH]
-    )
-    st.dataframe(df_check_display, use_container_width=True)
-    st.caption(f"총 {len(HATCH)}개 항목")
+# ----- 엑셀 로딩 -----
+try:
+    xls = pd.ExcelFile(up)
+    df_cat = pd.read_excel(xls, sheet_name="천장판")
+    BODY, SIDE, HATCH = load_catalog_from_excel(df_cat)
+    st.success(f"카탈로그 로드 — BODY {len(BODY)} / SIDE {len(SIDE)} / HATCH {len(HATCH)}")
 
-    st.markdown("### 바디판넬 카탈로그")
-    df_body_display = pd.DataFrame(
-        [{"이름": b.name, "폭": b.w, "길이": b.l, "가격": b.price} for b in BODY]
-    )
-    st.dataframe(df_body_display, use_container_width=True)
-    st.caption(f"총 {len(BODY)}개 항목")
+    # CUT_COST 덮어쓰기(있으면)
+    try:
+        df_cost = pd.read_excel(xls, sheet_name="시공비")
+        df_cost["항목"] = df_cost["항목"].astype(str).str.strip()
+        df_cost["공정"] = df_cost["공정"].astype(str).str.strip()
+        m = (df_cost["항목"] == "천장판") & (df_cost["공정"] == "절단")
+        if m.any():
+            cut_val = df_cost.loc[m, "시공비"].iloc[0]
+            globals()["CUT_COST"] = int(round(_to_int(cut_val)))
+            st.info(f"절단단가 갱신: {CUT_COST:,}원")
+    except Exception:
+        pass
 
-    st.markdown("### 사이드판넬 카탈로그")
-    df_side_display = pd.DataFrame(
-        [{"이름": s.name, "폭": s.w, "길이": s.l, "가격": s.price} for s in SIDE]
-    )
-    st.dataframe(df_side_display, use_container_width=True)
-    st.caption(f"총 {len(SIDE)}개 항목")
+except Exception as e:
+    st.error(f"엑셀 파싱 실패: {e}")
+    st.stop()
 
-    # 통계 요약
-    st.markdown("---")
-    st.markdown("#### 📊 카탈로그 통계")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("점검구", f"{len(HATCH)}종")
-    with col2:
-        st.metric("바디판넬", f"{len(BODY)}종")
-    with col3:
-        st.metric("사이드판넬", f"{len(SIDE)}종")
-
-# -------- 입력 ----------
-
-calc_btn = None
+# ----- 입력 -----
 if bath_type == "사각형 욕실":
     c1, c2, c3 = st.columns(3)
     with c1:
-        # 공유 데이터가 있으면 자동 설정, 없으면 기본값
-        default_w = shared_width if shared_width else 1600
-        W = st.number_input("욕실폭 W (세로, mm)", min_value=500, value=default_w, step=50,
-                           disabled=bool(shared_width),
-                           help="바닥판에서 자동 반영" if shared_width else None)
+        W = st.number_input("욕실폭 W (세로, mm)", 500, 9800, 1600, STEP_MM)
     with c2:
-        default_l = shared_length if shared_length else 2000
-        L = st.number_input("욕실길이 L (가로, mm)", min_value=500, value=default_l, step=50,
-                           disabled=bool(shared_length),
-                           help="바닥판에서 자동 반영" if shared_length else None)
+        L = st.number_input("욕실길이 L (가로, mm)", 500, 9800, 2000, STEP_MM)
     with c3:
-        # 공유 경계선 정보가 있으면 자동으로 "있음" 선택
-        if shared_sink_w:
-            split_on = "있음"
-            st.radio("세면/샤워 경계선 (바닥판 자동 반영)", [split_on], horizontal=True, disabled=True)
-        else:
-            split_on = st.radio("세면/샤워 경계선", ["없음", "있음"], horizontal=True)
+        split = st.slider("경계선(L축, 세면 길이)", 100, int(L), 1100, STEP_MM)
 
-    split = None
-    if split_on == "있음":
-        # 공유 세면부 폭이 있으면 자동 설정
-        if shared_sink_w:
-            split = shared_sink_w
-            st.slider(
-                "경계선 X (mm, 가로 기준) - 바닥판 자동 반영",
-                min_value=100,
-                max_value=int(L),
-                step=50,
-                value=split,
-                disabled=True
-            )
-        else:
-            split = st.slider(
-                "경계선 X (mm, 가로 기준)",
-                min_value=100,
-                max_value=int(L),
-                step=50,
-                value=min(1100, int(L)),
-            )
-
-    # 평면도
-    st.subheader("도면 미리보기 — 사각")
+    st.subheader("도면 미리보기 — 사각 (L 가로 / W 세로)")
     st.image(draw_rect_plan(W, L, split), use_container_width=False)
-
     calc_btn = st.button("계산 실행", type="primary")
 
 else:
-    # 코너형: 바닥판 치수를 참고값으로 표시
-    if shared_width and shared_length:
-        st.info(f"ℹ️ 참고: 바닥판 전체 치수 {shared_width}×{shared_length}mm")
-
     body_max_width = max((p.w for p in BODY), default=2000)
 
     colA, colB = st.columns(2)
@@ -1795,11 +1591,8 @@ else:
         st.error(f"❌ 오목부 폭(v4={v4}mm)은 BODY 패널의 최대 폭({body_max_width}mm)보다 작아야 합니다.")
         st.stop()
 
-    st.subheader("도면 미리보기 — 코너")
+    st.subheader("도면 미리보기 — 코너 (L 가로 / W 세로)")
     st.image(draw_corner_plan(v1, v2, v3, v4, v5, v6), use_container_width=False)
-
-    st.caption("세로 적층: 아래 방향, 1행 회전 금지, 2행부터 SIDE-900b 회전 절감 조건 적용")
-
     calc_btn = st.button("계산 실행", type="primary")
 
 # ----- 계산 -----
@@ -2006,55 +1799,16 @@ try:
         mime="application/json",
     )
 
-    # ====== Session State 자동저장 ======
-    try:
-        # PatternCost 객체를 직렬화 가능한 형태로 변환
-        pattern_cost_data = {
-            "pattern": pack.pattern,
-            "total_cost": pack.total_cost,
-            "row_lengths": pack.row_lengths,
-        }
+    with st.expander("테스트 체크리스트(예시 수치 맞춤)"):
+        st.markdown(
+            """
+- 사각형 예) L=2000, W=1600, split=1100  
+  세면 L′≈1125, 샤워 L′≈925 기준으로 셀 단위 BODY/SIDE 배치 확인  
 
-        st.session_state[CEIL_RESULT_KEY] = {
-            "section": "ceil",
-            "inputs": {
-                "bath_type": bath_type,
-                "prod_rate_pct": prod_rate_pct,
-                "sales_rate_pct": sales_rate_pct,
-                **meta,
-            },
-            "result": {
-                "pattern_cost": pattern_cost_data,
-                "summary": (
-                    df_summary.to_dict("records")[0] if not df_summary.empty else {}
-                ),
-                "elements": (
-                    df_elements.to_dict("records") if not df_elements.empty else []
-                ),
-                "management_fees": {
-                    "subtotal_sum": subtotal_sum,
-                    "prod_mgmt": int(round(prod_mgmt)),
-                    "sales_mgmt": int(round(sales_mgmt)),
-                    "final_price": int(round(final_price)),
-                    "hatch_info": {"name": hatch_name, "count": hatch_count, "price": hatch_price},
-                },
-                "json_export": export_json,
-            },
-        }
-        st.session_state[CEIL_DONE_KEY] = True
-
-        # JSON 파일 자동 저장 (exports 폴더)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        json_filename = f"ceil_{timestamp}.json"
-        json_path = os.path.join(EXPORT_DIR, json_filename)
-        _save_json(json_path, st.session_state[CEIL_RESULT_KEY])
-
-        st.success(f"✅ 천장 결과 자동저장 완료 (Session State + {json_filename})")
-    except Exception as save_err:
-        st.warning(f"⚠️ 자동저장 중 오류: {save_err}")
+- 코너형 예) 3=1000,4=600,5=900,6=900  
+  기존 m×n 엔진으로 배치 (코너형 셀 단위 엔진은 추후 적용 예정)
+"""
+        )
 
 except Exception as e:
     st.error(f"계산 실패: {e}")
-    import traceback
-
-    st.code(traceback.format_exc())

@@ -1,12 +1,9 @@
-# wall_panel_final.py
-# -*- coding: utf-8 -*-
-# 벽판 계산 프로그램 (통합) - New Layout Engine + 공통 스타일 + 세션 관리
+# wall_panel.py  (streamlit 앱)
+# 새 Layout 계산 엔진(layout_report) 완전 통합 버전
 
 from __future__ import annotations
 import math
-import json
-import os
-from datetime import datetime
+import json  # ★ 추가: JSON 저장
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Any
 
@@ -14,48 +11,7 @@ import streamlit as st
 import pandas as pd
 from PIL import Image, ImageDraw
 
-# --- Common Styles ---
-from common_styles import apply_common_styles, set_page_config
-
-# --- Authentication ---
-import auth
-
-# =========================================
-# Page Configuration
-# =========================================
-set_page_config(page_title="벽판 계산 프로그램 (통합)", layout="wide")
-apply_common_styles()
-auth.require_auth()
-
-# =========================================
-# Session State Keys
-# =========================================
-EXPORT_DIR = "exports"
-os.makedirs(EXPORT_DIR, exist_ok=True)
-
-FLOOR_DONE_KEY = "floor_done"
-FLOOR_RESULT_KEY = "floor_result"
-WALL_DONE_KEY = "wall_done"
-WALL_RESULT_KEY = "wall_result"
-CEIL_DONE_KEY = "ceil_done"
-CEIL_RESULT_KEY = "ceil_result"
-
-# 공유 데이터 키
-SHARED_EXCEL_KEY = "shared_excel_file"
-SHARED_EXCEL_NAME_KEY = "shared_excel_filename"
-SHARED_BATH_SHAPE_KEY = "shared_bath_shape"
-SHARED_BATH_WIDTH_KEY = "shared_bath_width"
-SHARED_BATH_LENGTH_KEY = "shared_bath_length"
-SHARED_SINK_WIDTH_KEY = "shared_sink_width"
-SHARED_MATERIAL_KEY = "shared_floor_material"
-
-# =========================================
-# Utility Functions
-# =========================================
-def _save_json(path: str, data: dict):
-    """JSON 파일 저장"""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+st.set_page_config(page_title="벽판 규격/개수 산출 (통합, New Engine)", layout="wide")
 
 # =========================================================
 # 0) 공통 유틸
@@ -809,16 +765,7 @@ def panels_for_faces_new_engine(faces: List[FaceSpec], TH: int, TW: int):
 # =========================================================
 # 5) UI
 # =========================================================
-st.title("벽판 계산 프로그램 (통합)")
-
-# 바닥판 완료 확인
-floor_done = st.session_state.get(FLOOR_DONE_KEY, False)
-if not floor_done:
-    st.warning("⚠️ 벽판 계산을 진행하려면 먼저 **바닥판 계산**을 완료해야 합니다.")
-    st.info("""
-    좌측 사이드바에서 **바닥판 계산** 페이지로 이동하여 계산을 먼저 진행하세요.
-    """)
-    st.stop()
+st.title("벽판 규격/개수 산출 (통합 · New Layout Engine)")
 
 # ★ 기본 단가 전역값(세션) 준비
 if "wall_unit_price" not in st.session_state:
@@ -826,38 +773,34 @@ if "wall_unit_price" not in st.session_state:
 if "last_price_msg" not in st.session_state:
     st.session_state["last_price_msg"] = "기본단가 30,000원 사용"
 
-# 바닥판에서 업로드한 엑셀 파일 가져오기
-excel_file = st.session_state.get(SHARED_EXCEL_KEY)
-excel_filename = st.session_state.get(SHARED_EXCEL_NAME_KEY, "알 수 없음")
-
-# 엑셀 파일이 있으면 단가 읽기
-if excel_file is not None:
-    try:
-        xls = pd.ExcelFile(excel_file)
-        if "자재단가내역" in xls.sheet_names:
-            df_price = pd.read_excel(xls, "자재단가내역")
-            # 조건: 품목='벽판' 만 우선 사용
-            wall_rows = df_price[df_price["품목"] == "벽판"]
-            if not wall_rows.empty:
-                # 첫 행만 사용
-                unit_price = int(wall_rows.iloc[0]["단가"])
-                st.session_state["wall_unit_price"] = unit_price
-                st.session_state["last_price_msg"] = f"엑셀에서 벽판단가 {unit_price:,}원 적용"
-            else:
-                st.session_state["last_price_msg"] = "엑셀에 '품목=벽판' 행이 없어 기본단가 사용"
-        else:
-            st.session_state["last_price_msg"] = "'자재단가내역' 시트를 찾지 못해 기본단가 사용"
-    except Exception as ex:
-        st.session_state["last_price_msg"] = f"엑셀 읽기 오류: {ex}"
-
-# 카탈로그 확인 UI
-with st.expander("📋 업로드된 엑셀 정보 확인", expanded=False):
-    st.write(f"**파일명**: {excel_filename}")
-    st.markdown(f"**현재 벽판 단가**: {st.session_state['wall_unit_price']:,} 원")
-    st.caption(st.session_state["last_price_msg"])
-
 with st.sidebar:
     st.header("기본 입력")
+    # 1. 엑셀파일 업로드 창 ★ 추가
+    price_file = st.file_uploader("엑셀 업로드 (자재단가내역 시트)", type=["xlsx", "xls"])
+
+    # 업로드되면 벽판 단가 읽기
+    if price_file is not None:
+        try:
+            xls = pd.ExcelFile(price_file)
+            if "자재단가내역" in xls.sheet_names:
+                df_price = pd.read_excel(xls, "자재단가내역")
+                # 조건: 품목='벽판' 만 우선 사용 (필요하면 분류/사양까지 좁힐 수 있음)
+                wall_rows = df_price[df_price["품목"] == "벽판"]
+                if not wall_rows.empty:
+                    # 첫 행만 사용
+                    unit_price = int(wall_rows.iloc[0]["단가"])
+                    st.session_state["wall_unit_price"] = unit_price
+                    st.session_state["last_price_msg"] = f"엑셀에서 벽판단가 {unit_price:,}원 적용"
+                else:
+                    st.session_state["last_price_msg"] = "엑셀에 '품목=벽판' 행이 없어 기본단가 사용"
+            else:
+                st.session_state["last_price_msg"] = "'자재단가내역' 시트를 찾지 못해 기본단가 사용"
+        except Exception as ex:
+            st.session_state["last_price_msg"] = f"엑셀 읽기 오류: {ex}"
+
+    # 현재 단가 표시
+    st.markdown(f"**현재 벽판 단가:** {st.session_state['wall_unit_price']:,} 원")
+    st.caption(st.session_state["last_price_msg"])
 
     shape = st.radio("욕실형태", ["사각형", "코너형"], horizontal=True)
     split_kind = st.radio("세면/샤워 구분", ["구분 없음", "구분 있음"], horizontal=True)
@@ -901,6 +844,7 @@ with st.sidebar:
                 j_lower_segments_map[int(j_wall)] = [int(w1), int(w2)]
 
     st.divider()
+    # ★ 3,4. 생산관리비율, 영업관리비율 입력
     st.subheader("비용 비율(%)")
     rp = st.number_input("생산관리비율 rₚ (%)", min_value=0.0, max_value=50.0, value=10.0, step=0.5)
     rs = st.number_input("영업관리비율 rₛ (%)", min_value=0.0, max_value=50.0, value=5.0, step=0.5)
@@ -912,7 +856,7 @@ errors: List[str] = []
 preview_img: Optional[Image.Image] = None
 
 # 이 변수들은 두 branch에서 공통으로 쓰려고 미리 선언
-final_cost_json = None
+final_cost_json = None   # ★ 나중에 json으로 뽑을 데이터
 wall_unit_price = st.session_state["wall_unit_price"]
 
 if shape == "사각형":
@@ -1000,17 +944,17 @@ if shape == "사각형":
                     margin=MARGIN,
                     scale=global_scale
                     )
-
+                
                 with cols[i%2]:
                     is_jendai_wall = (j_enabled and j_has_step and (j_wall is not None) and (int(j_wall) == int(wid)))
                     extra = 2 if is_jendai_wall else 0
                     caption = f"{wall_label('사각형', wid)} (벽면 {len(faces) + extra})개"
                     st.image(img, caption=caption, use_container_width=False)
-
+           
             # 새 엔진으로 패널 산출
             st.subheader("벽면별 벽판 산출 (New Engine)")
             rows, errs = panels_for_faces_new_engine(all_faces, TH, TW)
-            if j_enabled and j_has_step and int(j_depth) > 0 and int(j_h) > 0:
+            if j_enabled and j_has_step and int(j_depth) > 0 and int(j_h) > 0: 
                 side_rows = compute_jendai_side_panels("사각형", j_enabled, j_has_step, int(j_depth), int(j_h))
                 TH, TW = parse_tile(tile)
                 for r in side_rows:
@@ -1028,7 +972,7 @@ if shape == "사각형":
                 df = df[[c for c in show_cols if c in df.columns]]
                 st.dataframe(df, use_container_width=True)
 
-                # 비용계산
+                # ★ 여기서부터 비용계산
                 panel_count = len(df)
                 subtotal = panel_count * wall_unit_price  # 소계
                 r_p = rp / 100.0
@@ -1046,7 +990,7 @@ if shape == "사각형":
                 st.write(f"- 생산관리비({rp:.1f}%): **{prod_cost:,.0f} 원** → 생산관리비포함: **{prod_included:,.0f} 원**")
                 st.write(f"- 영업관리비({rs:.1f}%): **{sales_cost:,.0f} 원** → 최종(영업관리비포함): **{sales_included:,.0f} 원**")
 
-                # JSON으로 만들기
+                # ★ 5. JSON으로 만들기
                 final_cost_json = {
                     "panel_count": int(panel_count),
                     "unit_price": int(wall_unit_price),
@@ -1058,41 +1002,8 @@ if shape == "사각형":
                     "sales_overhead": int(round(sales_cost)),
                     "final_price": int(round(sales_included)),
                 }
-
-                # 세션 상태에 결과 저장
-                st.session_state[WALL_RESULT_KEY] = {
-                    "section": "wall",
-                    "inputs": {
-                        "shape": shape,
-                        "H": H,
-                        "floor_type": floor_type,
-                        "tile": tile,
-                        "BL": BL,
-                        "BW": BW,
-                        "door_wall": door_wall,
-                        "door_s": door_s,
-                        "door_d": door_d,
-                        "j_enabled": j_enabled,
-                        "j_wall": j_wall,
-                        "j_h": j_h,
-                        "j_depth": j_depth,
-                        "j_has_step": j_has_step,
-                        "rp": rp,
-                        "rs": rs,
-                    },
-                    "result": final_cost_json,
-                    "panels": df.to_dict("records"),
-                }
-                st.session_state[WALL_DONE_KEY] = True
-
-                # JSON 파일로 저장
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                json_filename = f"wall_{timestamp}.json"
-                json_path = os.path.join(EXPORT_DIR, json_filename)
-                _save_json(json_path, st.session_state[WALL_RESULT_KEY])
-
                 json_str = json.dumps(final_cost_json, ensure_ascii=False, indent=2)
-                st.download_button("📥 결과 JSON 다운로드", data=json_str, file_name="wall_panel_cost.json", mime="application/json")
+                st.download_button("결과 JSON 다운로드", data=json_str, file_name="wall_panel_cost.json", mime="application/json")
 
                 st.markdown("**동일 치수 벽판 수량 집계**")
                 order = (df.groupby(["벽판폭","벽판높이"], as_index=False)
@@ -1101,15 +1012,6 @@ if shape == "사각형":
                 order = order[["치수","qty","벽판폭","벽판높이"]]
                 st.dataframe(order, use_container_width=True)
                 st.markdown(f"**총 벽판 개수:** {len(df)} 장")
-
-                st.success("✅ 계산 완료")
-
-                # 다음 단계 안내
-                st.info("""
-                **다음 단계**: 천장판 계산을 진행하세요.
-
-                좌측 사이드바에서 **천장판 계산** 페이지로 이동하여 계산을 진행할 수 있습니다.
-                """)
 
             if errs:
                 st.warning("규칙 적용 실패/제약 위반 벽면")
@@ -1201,7 +1103,7 @@ else:
                     margin=MARGIN,
                     scale=global_scale
                     )
-
+                
                 with cols[i % 3]:
                     is_jendai_wall = (j_enabled and j_has_step and (j_wall is not None) and (int(j_wall) == int(wid)))
                     extra = 1 if is_jendai_wall else 0
@@ -1228,7 +1130,7 @@ else:
                 df = df[[c for c in show_cols if c in df.columns]]
                 st.dataframe(df, use_container_width=True)
 
-                # 코너형도 비용계산 동일하게
+                # ★ 코너형도 비용계산 동일하게
                 panel_count = len(df)
                 subtotal = panel_count * wall_unit_price
                 r_p = rp / 100.0
@@ -1257,40 +1159,8 @@ else:
                     "sales_overhead": int(round(sales_cost)),
                     "final_price": int(round(sales_included)),
                 }
-
-                # 세션 상태에 결과 저장
-                st.session_state[WALL_RESULT_KEY] = {
-                    "section": "wall",
-                    "inputs": {
-                        "shape": shape,
-                        "H": H,
-                        "floor_type": floor_type,
-                        "tile": tile,
-                        "W1": W1, "W2": W2, "W3": W3, "W4": W4, "W5": W5, "W6": W6,
-                        "door_wall": door_wall,
-                        "door_s": door_s,
-                        "door_d": door_d,
-                        "j_enabled": j_enabled,
-                        "j_wall": j_wall,
-                        "j_h": j_h,
-                        "j_depth": j_depth,
-                        "j_has_step": j_has_step,
-                        "rp": rp,
-                        "rs": rs,
-                    },
-                    "result": final_cost_json,
-                    "panels": df.to_dict("records"),
-                }
-                st.session_state[WALL_DONE_KEY] = True
-
-                # JSON 파일로 저장
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                json_filename = f"wall_{timestamp}.json"
-                json_path = os.path.join(EXPORT_DIR, json_filename)
-                _save_json(json_path, st.session_state[WALL_RESULT_KEY])
-
                 json_str = json.dumps(final_cost_json, ensure_ascii=False, indent=2)
-                st.download_button("📥 결과 JSON 다운로드", data=json_str, file_name="wall_panel_cost.json", mime="application/json")
+                st.download_button("결과 JSON 다운로드", data=json_str, file_name="wall_panel_cost.json", mime="application/json")
 
                 st.markdown("**동일 치수 벽판 수량 집계**")
                 order = (df.groupby(["벽판폭","벽판높이"], as_index=False)
@@ -1299,15 +1169,6 @@ else:
                 order = order[["치수","qty","벽판폭","벽판높이"]]
                 st.dataframe(order, use_container_width=True)
                 st.markdown(f"**총 벽판 개수:** {len(df)} 장")
-
-                st.success("✅ 계산 완료")
-
-                # 다음 단계 안내
-                st.info("""
-                **다음 단계**: 천장판 계산을 진행하세요.
-
-                좌측 사이드바에서 **천장판 계산** 페이지로 이동하여 계산을 진행할 수 있습니다.
-                """)
 
             if errs:
                 st.warning("규칙 적용 실패/제약 위반 벽면")

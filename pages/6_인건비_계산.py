@@ -10,7 +10,19 @@ from typing import Dict, Any, Tuple, List
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="인건비 계산", layout="wide")
+# --- Common Styles ---
+from common_styles import apply_common_styles, set_page_config
+
+# --- Authentication ---
+import auth
+
+# =========================================
+# Page Configuration
+# =========================================
+set_page_config(page_title="인건비 계산", layout="wide")
+apply_common_styles()
+auth.require_auth()
+
 st.title("인건비 계산")
 
 # ------------------------------

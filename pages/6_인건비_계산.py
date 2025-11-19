@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# labor_cost3.py
+# labor_cost_new.py
 # Streamlit app: 입력조건 기반 시스템욕실 설치 인건비 계산 (엑셀 카탈로그 기반)
-# 실행: streamlit run labor_cost3.py
+# 실행: streamlit run labor_cost_new.py
 
 from __future__ import annotations
 import math
@@ -29,6 +29,10 @@ st.title("인건비 계산")
 # Constants & Helpers
 # ------------------------------
 BUCKETS = ["≤49", "≤99", "≤149", "≤199", "≤299", "≥300"]
+
+# ★ 사이드바에서 조절할 옵션 (기본값)
+include_meals = True          # 식대·숙박비 포함 여부
+include_oji_extra = True      # 유류비(오지) 추가비 포함 여부
 
 def parse_code_to_area(code: str) -> float:
     """
@@ -198,7 +202,7 @@ def _parse_grp_summary_250905(df: pd.DataFrame):
         crew_count, meal_unit, lodging_unit = 4, 10000, 25000
 
     meals_std = {
-        "included_in_base": True,
+        "included_in_base": False,   # 기준단가에 숙식비 미포함 가정
         "crew_count": crew_count,
         "meal_unit": meal_unit,
         "lodging_unit": lodging_unit,
@@ -399,7 +403,7 @@ def make_empty_tables() -> tuple:
     empty_oji = pd.DataFrame({"region": []})
     empty_area_rules: Dict[str, Dict[str, Any]] = {}
     empty_meals = {
-        "included_in_base": True,
+        "included_in_base": False,
         "crew_count": 0,
         "meal_unit": 0,
         "lodging_unit": 0,
@@ -467,6 +471,10 @@ def fuel_surcharge(bucket: str, vehicles_tbl: pd.DataFrame) -> int:
     return int(v * cost)
 
 def meals_amount(meals_std: Dict[str, Any]) -> int:
+    """
+    세대당 숙식비.
+    crew * (식대 + 숙박비) * 세대당 일수
+    """
     crew = int(meals_std.get("crew_count", 0))
     meal = int(meals_std.get("meal_unit", 0))
     lodge = int(meals_std.get("lodging_unit", 0))
@@ -503,52 +511,88 @@ def detail_cost(material: str, bucket: str, detail_catalogs: Dict[str, pd.DataFr
     return subtotal, logs
 
 def compute():
-    """세대당 인건비와 로그 반환. (기준단가 소스: 2025 세부표 고정)"""
+    """
+    세대당 인건비와 로그, breakdown 반환.
+    - 기준설치비 = Base + 형상/세대/재질 보정 + 면적 보정
+    - 숙식비(세대당) 별도 가산
+    - (오지일 경우) 유류비 별도 가산
+    - 세부설치비(세대당)는 '참고용'만 표시, 계산에는 미포함
+    """
     logs: List[str] = []
 
-    # Base
+    # 1) 기준설치비 구성
     base, base_note = pick_base(material, bucket)
     logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
-    price = base
 
-    # 형상/세대/재질 보정
     delta_shape = shape_adjust(material, shape, user_type, adjust_tbl)
     logs.append(f"형상/세대/재질 보정: {material}, {shape}, {user_type} → {fmt_money(delta_shape)}")
-    price += delta_shape
 
-    # 면적 보정 (경계 포함)
     d_area = area_adjust(material, area, area_rules)
     logs.append(f"면적 보정: 면적={area:.2f}㎡ → {fmt_money(d_area)}")
-    price += d_area
 
-    # 외곽/오지 유류비
+    base_install = base + delta_shape + d_area
+    logs.append(f"기준설치비 합계(세대당): {fmt_money(base_install)}")
+
+    # 2) 숙식비 (기준단가에 포함되지 않음 → 항상 추가)
+    meals_info = meals_amount(meals_std)
+    logs.append(
+        f"숙식비(세대당): crew={meals_std.get('crew_count',0)}, "
+        f"식대={fmt_money(meals_std.get('meal_unit',0))}, "
+        f"숙박={fmt_money(meals_std.get('lodging_unit',0))}, "
+        f"일수={meals_std.get('days',0)} → {fmt_money(meals_info)}"
+    )
+
+    subtotal = base_install + meals_info
+    logs.append(f"기준단가 합계(세대당, 유류비 제외): {fmt_money(subtotal)}")
+
+    # 3) 제주 예외 처리
+    fuel = 0
     if region == "제주":
         logs.append("제주: 별도 산정 (자동 계산 중단)")
-        return None, logs
+        breakdown = {
+            "base_raw": base,
+            "shape_adj": delta_shape,
+            "area_adj": d_area,
+            "base_install": base_install,
+            "meals": meals_info,
+            "subtotal_ex_fuel": subtotal,
+            "fuel": 0,
+            "detail_per_unit": 0,
+            "final": None,
+        }
+        return None, logs, breakdown
 
+    # 4) 외곽/오지 유류비
     if is_oji:
-        d_oji = fuel_surcharge(bucket, vehicles_tbl)
-        price += d_oji
-        logs.append(f"외곽/오지 유류비: 버킷={bucket} → {fmt_money(d_oji)}")
+        fuel = fuel_surcharge(bucket, vehicles_tbl)
+        logs.append(f"유류비 추가비(세대당): 버킷={bucket} → {fmt_money(fuel)}")
     else:
-        logs.append("외곽/오지 유류비: 미적용")
+        logs.append("유류비 추가비: 미적용 (외곽/오지 아님)")
 
-    # 숙식비 처리 (2025 세부표 기준)
-    meals_info = meals_amount(meals_std)
-    if meals_std["override_toggle"]:
-        base_included = 140000 if meals_std["included_in_base"] else 0
-        delta_meals = meals_info - base_included
-        price += delta_meals
-        logs.append(f"숙식비 재계산(치환): {fmt_money(delta_meals)} (기본포함 {fmt_money(base_included)})")
-    else:
-        logs.append("숙식비: 표의 Base에 포함 가정, 재계산 미적용")
-
-    # 세부 설치비
+    # 5) 세부 설치비 (프로젝트 전체 → 세대당 환산) - 참고용만, 계산에는 미포함
     d_detail, dlogs = detail_cost(material, bucket, detail_catalogs)
     logs.extend(dlogs)
-    price += d_detail / max(units, 1)
+    detail_per_unit = d_detail / max(units, 1)
+    logs.append(f"세부설치비(세대당 환산, 참고용/계산 미포함): {fmt_money(detail_per_unit)}")
 
-    return int(round(price)), logs
+    # ⚠ 최종 인건비 계산에서 세부설치비는 제외
+    final_price = subtotal + fuel
+
+    logs.append(f"최종 세대당 인건비(세부설치비 미포함): {fmt_money(final_price)}")
+
+    breakdown = {
+        "base_raw": base,
+        "shape_adj": delta_shape,
+        "area_adj": d_area,
+        "base_install": base_install,
+        "meals": meals_info,
+        "subtotal_ex_fuel": subtotal,
+        "fuel": fuel,
+        "detail_per_unit": detail_per_unit,  # 참고용
+        "final": final_price,
+    }
+
+    return int(round(final_price)), logs, breakdown
 
 # ------------------------------
 # Sidebar: 입력조건
@@ -575,7 +619,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("입력조건")
-    units = st.number_input("세대수 (프로젝트 전체)", min_value=1, step=1, value=120)
+    units = st.number_input("세대수 (프로젝트 전체)", min_value=1, step=1, value=49)
     material = st.selectbox("재질", ["GRP", "FRP", "PP/PE"], index=0)
     shape = st.selectbox("형상", ["코너형", "사각형"], index=0)
     user_type = st.selectbox("세대유형", ["일반", "주거약자"], index=0)
@@ -584,16 +628,31 @@ with st.sidebar:
     region = st.selectbox("지역", ["수도권", "지방", "제주"], index=0)
     is_oji = st.checkbox("외곽/오지 지역 여부", value=False, help="강화도/고성/통영/거제/남해/고흥/완도/진도/신안 등")
 
+    # ★ 식대·숙박비 포함 여부 (합계(세대) 기준단가)
+    include_meals = st.checkbox(
+        "식대·숙박비 포함 합계(세대) 기준단가",
+        value=True,
+        help="체크 시 crew·식대·숙박비·일수를 반영한 숙식비를 세대당 인건비에 포함합니다."
+    )
+
+    # ★ 유류비(오지) 추가비 포함 여부
+    include_oji_extra = st.checkbox(
+        "유류비(오지) 추가비 포함",
+        value=True,
+        help="체크 시 외곽/오지 차량 유류비를 세대당 인건비에 포함합니다."
+    )
+
     bucket = get_bucket(int(units))
 
     st.markdown("---")
-    st.markdown("**기준단가(Base) 소스: 2025 세부표 사용**")
+    st.markdown("**기준단가(Base) 소스: 2025 세부표 사용 (숙식비 미포함)**")
 
     st.markdown("---")
     if st.button("계산 실행", type="primary", use_container_width=True):
-        result, log_lines = compute()
+        result, log_lines, breakdown = compute()
         st.session_state["calc_result"] = result
         st.session_state["calc_logs"] = log_lines
+        st.session_state["calc_breakdown"] = breakdown
         st.success("계산을 완료했습니다. ⑥ 결과/근거 로그 탭을 확인하세요.")
 
 # ------------------------------
@@ -601,7 +660,7 @@ with st.sidebar:
 # ------------------------------
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "① 버킷별 기준단가", "② 형상/세대/재질 보정", "③ 면적 보정", "④ 외곽/오지·유류비",
-    "⑤ 숙식비 & 일당모드", "⑥ 결과/근거 로그", "⑦ 세부설치비 선택(카탈로그)"
+    "⑤ 숙식비 설정", "⑥ 결과/근거 로그", "⑦ 세부설치비 선택(카탈로그)"
 ])
 
 # ------------------------------
@@ -700,19 +759,17 @@ with tab4:
     st.session_state.tables = (base_grp, base_ppe, adjust_tbl, area_rules, vehicles_tbl, oji_tbl, meals_std, detail_catalogs)
 
 # ------------------------------
-# ⑤ 숙식비 & 일당모드
+# ⑤ 숙식비 설정
 # ------------------------------
 with tab5:
-    st.subheader("숙식비 & 일당모드")
+    st.subheader("숙식비 설정 (기준단가에 미포함, 별도 가산)")
     c1, c2 = st.columns(2)
     with c1:
-        meals_std["included_in_base"] = st.checkbox("Base 단가에 숙식비 포함", value=meals_std.get("included_in_base", True))
-        meals_std["override_toggle"] = st.checkbox("숙식비 재계산(치환) 사용", value=meals_std.get("override_toggle", False))
-    with c2:
         meals_std["crew_count"] = st.number_input("crew 인원 수", min_value=0, step=1, value=int(meals_std.get("crew_count", 4)))
+        meals_std["days"] = st.number_input("세대당 숙식 일수", min_value=0, step=1, value=int(meals_std.get("days", 1)))
+    with c2:
         meals_std["meal_unit"] = st.number_input("1인 1일 식대(원)", min_value=0, step=1000, value=int(meals_std.get("meal_unit", 10000)))
         meals_std["lodging_unit"] = st.number_input("1인 1일 숙박비(원)", min_value=0, step=1000, value=int(meals_std.get("lodging_unit", 25000)))
-        meals_std["days"] = st.number_input("세대당 숙식 일수", min_value=0, step=1, value=int(meals_std.get("days", 1)))
     st.session_state.tables = (base_grp, base_ppe, adjust_tbl, area_rules, vehicles_tbl, oji_tbl, meals_std, detail_catalogs)
 
 # ------------------------------
@@ -723,6 +780,7 @@ with tab6:
 
     result = st.session_state.get("calc_result", None)
     log_lines = st.session_state.get("calc_logs", [])
+    breakdown = st.session_state.get("calc_breakdown", {})
 
     if "calc_result" not in st.session_state:
         st.info("좌측 사이드바에서 **'계산 실행'** 버튼을 눌러 계산을 수행하세요.")
@@ -732,26 +790,79 @@ with tab6:
         else:
             st.metric("세대당 인건비", fmt_money(result))
 
-    st.markdown("---")
-    st.markdown("### 계산 근거 로그 (표)")
+        st.markdown("---")
+        st.markdown("### ① 조건 요약")
 
-    if log_lines:
-        log_rows = []
-        for line in log_lines:
-            if line.startswith("  - "):
-                kind = "세부항목"
-                text = line[4:]
-            else:
-                kind = "요약"
-                text = line
-            log_rows.append({"구분": kind, "내용": text})
-        log_df = pd.DataFrame(log_rows)
-        st.dataframe(log_df, use_container_width=True)
-    else:
-        if "calc_result" in st.session_state:
-            st.info("근거 로그가 없습니다.")
+        # 면적 기준 정보
+        mat_rule = area_rules.get(material.upper(), {})
+        area_min = mat_rule.get("min", None)
+        area_max = mat_rule.get("max", None)
+        if area_min is not None and area_max is not None:
+            area_range_str = f"{area_min:.1f} ~ {area_max:.1f}"
         else:
-            st.info("아직 계산을 수행하지 않았습니다.")
+            area_range_str = "-"
+
+        cond_rows = [
+            {"항목":"재질", "값": material},
+            {"항목":"형상", "값": shape},
+            {"항목":"세대유형", "값": user_type},
+            {"항목":"세대수", "값": int(units)},
+            {"항목":"버킷", "값": bucket},
+            {"항목":"규격코드", "값": code},
+            {"항목":"면적(㎡)", "값": f"{area:.2f}"},
+            {"항목":"면적 기준범위(㎡)", "값": area_range_str},
+            {"항목":"지역", "값": region},
+            {"항목":"외곽/오지", "값": "예" if is_oji else "아니오"},
+        ]
+        cond_df = pd.DataFrame(cond_rows)
+        st.table(cond_df)
+
+        st.markdown("---")
+        st.markdown("### ② 비용 요약 (세대당)")
+
+        base_install = breakdown.get("base_install", None)
+        meals_cost = breakdown.get("meals", None)
+        fuel_cost = breakdown.get("fuel", None)
+        subtotal_ex_fuel = breakdown.get("subtotal_ex_fuel", None)
+        detail_per_unit = breakdown.get("detail_per_unit", None)
+        final_price = breakdown.get("final", result)
+
+        summary_rows = []
+        if base_install is not None:
+            summary_rows.append({"항목":"기준설치비", "금액(원)": fmt_money(base_install), "비고":"Base + 형상/세대/재질 보정 + 면적 보정"})
+        if meals_cost is not None:
+            summary_rows.append({"항목":"숙식비", "금액(원)": fmt_money(meals_cost), "비고":"기준단가에 미포함, 별도 가산"})
+        if subtotal_ex_fuel is not None:
+            summary_rows.append({"항목":"기준단가 합계", "금액(원)": fmt_money(subtotal_ex_fuel), "비고":"유류비 제외"})
+        if fuel_cost is not None and fuel_cost != 0:
+            summary_rows.append({"항목":"유류비 추가비", "금액(원)": fmt_money(fuel_cost), "비고":"외곽/오지일 경우"})
+        # 세부설치비(세대당)는 계산에 포함되지 않으므로 요약 표에서는 제외
+        if final_price is not None:
+            summary_rows.append({"항목":"최종 세대당 인건비", "금액(원)": fmt_money(final_price), "비고":""})
+
+        if summary_rows:
+            summary_df = pd.DataFrame(summary_rows)
+            st.table(summary_df)
+        else:
+            st.info("요약할 비용 정보가 없습니다.")
+
+        st.markdown("---")
+        st.markdown("### ③ 계산 근거 로그 (표)")
+
+        if log_lines:
+            log_rows = []
+            for line in log_lines:
+                if line.startswith("  - "):
+                    kind = "세부항목"
+                    text = line[4:]
+                else:
+                    kind = "요약"
+                    text = line
+                log_rows.append({"구분": kind, "내용": text})
+            log_df = pd.DataFrame(log_rows)
+            st.dataframe(log_df, use_container_width=True)
+        else:
+            st.info("근거 로그가 없습니다.")
 
 # ------------------------------
 # ⑦ 세부설치비 선택(카탈로그)
@@ -811,7 +922,7 @@ with st.expander("디버그용 JSON 보기", expanded=False):
             "면적": area,
             "지역": region,
             "외곽오지": bool(is_oji),
-            "Base소스": "2025 세부표 사용",
+            "Base소스": "2025 세부표 사용 (숙식비 미포함)",
         },
         "meals_std": meals_std,
     }, ensure_ascii=False, indent=2), language="json")

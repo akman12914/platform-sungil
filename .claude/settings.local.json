@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\".venv/Scripts/python\" -c \"\n# -*- coding: utf-8 -*-\nimport pandas as pd\nimport sys\nsys.stdout.reconfigure(encoding=''utf-8'')\n\nfile_path = ''강우수정코드/2. LGE 창원 스마트파크1 기숙사 신축공사 시스템욕실공사 세대당 단가 내역서-이사님검토.xls''\ndf = pd.read_excel(file_path, sheet_name=0, header=None)\n\nprint(''=== 헤더 구조 (4~6행) ==='')\nprint(df.iloc[4:7, 0:16].to_string())\nprint()\nprint(''=== 전체 컬럼 수 ==='')\nprint(f''컬럼 수: {len(df.columns)}'')\nprint()\nprint(''=== 마지막 부분 (합계 등) ==='')\nprint(df.tail(20).to_string())\n\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

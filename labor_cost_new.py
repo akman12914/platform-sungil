@@ -11,6 +11,31 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="인건비 계산", layout="wide")
+
+# ------------------------------
+# 공통 스타일 (다크 사이드바)
+# ------------------------------
+def _sidebar_dark_and_slider_fix():
+    st.markdown(
+        """
+    <style>
+      :root{ --sb-bg:#0b1220; --sb-fg:#e2e8f0; --sb-muted:#cbd5e1; --sb-line:#1f2a44;
+             --accent:#22d3ee; --accent-2:#06b6d4; --ink:#0f172a; --muted:#475569; --line:#e2e8f0; }
+      section[data-testid="stSidebar"]{ background:var(--sb-bg)!important; color:var(--sb-fg)!important; border-right:1px solid var(--sb-line); }
+      section[data-testid="stSidebar"] *{ color:var(--sb-fg)!important; }
+      section[data-testid="stSidebar"] .stMarkdown p, section[data-testid="stSidebar"] label{ color:var(--sb-muted)!important; font-weight:600!important; }
+      [data-testid="stAppViewContainer"] .stButton>button{
+        background:linear-gradient(180deg,var(--accent),var(--accent-2))!important; color:#001018!important;
+        border:0!important; font-weight:800!important; letter-spacing:.2px;
+      }
+      [data-testid="stAppViewContainer"] .stButton>button:hover{ filter:brightness(1.05); }
+    </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+_sidebar_dark_and_slider_fix()
+
 st.title("인건비 계산")
 
 # ------------------------------

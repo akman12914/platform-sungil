@@ -16,6 +16,77 @@ FLOOR_RESULT_KEY = "floor_result"
 WALL_RESULT_KEY = "wall_result"
 CEIL_RESULT_KEY = "ceil_result"
 SAVED_QUOTATIONS_KEY = "saved_quotations"  # 저장된 세대 타입별 견적 목록 (최대 10개)
+PROD_MGMT_SETTINGS_KEY = "prod_mgmt_settings"  # 생산관리비 설정
+
+# 생산관리비 기본 카테고리 정의 (품목+사양 단위로 세부 지정)
+# items: [(품목, 사양패턴), ...] - 사양패턴이 None이면 해당 품목 전체, 문자열이면 contains 매칭
+DEFAULT_PROD_MGMT_CATEGORIES = {
+    "회사생산품(바닥판,욕조)": {
+        "items": [
+            ("바닥판", "GRP"),
+            ("바닥판", "SMC/FRP"),
+            ("바닥판", "PP/PE"),
+            ("욕조", None),  # 욕조 전체
+        ],
+        "rate": 0.0,
+    },
+    "회사생산품(천장판)": {
+        "items": [
+            ("천장판", None),  # 천장판 전체
+        ],
+        "rate": 0.0,
+    },
+    "회사-명진(벽,PVE바닥판)": {
+        "items": [
+            ("벽판", None),  # 벽판 전체
+            ("바닥판", "PVE"),  # PVE 바닥판만
+        ],
+        "rate": 0.0,
+    },
+    "타사(천장,바닥판,타일)": {
+        "items": [
+            ("타일", None),  # 타일 전체
+        ],
+        "rate": 0.0,
+    },
+    "타사(도기,수전,기타)": {
+        "items": [
+            ("도기류", None),
+            ("수전", None),
+            ("액세서리", None),
+            ("문세트", None),
+            ("욕실등", None),
+            ("공통자재", None),
+            ("냉온수배관", None),
+            ("문틀규격", None),
+            ("은경", None),
+            ("욕실장", None),
+            ("칸막이", None),
+            ("환기류", None),
+        ],
+        "rate": 0.0,
+    },
+}
+
+
+def get_item_key(품목: str, 사양: str) -> str:
+    """품목+사양을 고유 키로 변환"""
+    return f"{품목}::{사양}"
+
+
+def parse_item_key(key: str) -> tuple:
+    """고유 키를 품목, 사양으로 분리"""
+    parts = key.split("::", 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else (parts[0], "")
+
+
+def item_matches_pattern(품목: str, 사양: str, pattern_품목: str, pattern_사양: Optional[str]) -> bool:
+    """품목+사양이 패턴과 매칭되는지 확인"""
+    if 품목 != pattern_품목:
+        return False
+    if pattern_사양 is None:
+        return True  # 품목만 매칭하면 전체 포함
+    return pattern_사양.upper() in 사양.upper()
 
 set_page_config(page_title="욕실 견적서 생성기", layout="wide")
 apply_common_styles()
@@ -369,6 +440,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### ③ 옵션 선택")
 
+# 생산관리비 설정은 견적서 데이터가 생성된 후에 표시 (아래로 이동)
+# 먼저 rows 데이터를 생성한 후 UI를 표시
+
 # Load pricebook
 price_df: Optional[pd.DataFrame] = None
 if pricebook_file is not None:
@@ -716,7 +790,275 @@ if rows:
     st.dataframe(totals, use_container_width=True)
 
     grand_total = est_df["금액"].sum()
-    st.metric("총 금액", f"{grand_total:,.0f} 원")
+    st.metric("총 금액 (생산관리비 제외)", f"{grand_total:,.0f} 원")
+
+    # ----------------------------
+    # 생산관리비 설정 UI (견적서 데이터 기반)
+    # ----------------------------
+    st.markdown("---")
+    st.subheader("생산관리비 설정")
+
+    # 현재 견적서의 모든 품목+사양 목록 추출
+    available_items = []
+    for _, row in est_df.iterrows():
+        item_key = get_item_key(str(row["품목"]), str(row["사양 및 규격"]))
+        if item_key not in [i[0] for i in available_items]:
+            available_items.append((item_key, str(row["품목"]), str(row["사양 및 규격"]), float(row["금액"])))
+
+    # 세션 상태 초기화
+    if PROD_MGMT_SETTINGS_KEY not in st.session_state:
+        st.session_state[PROD_MGMT_SETTINGS_KEY] = {
+            cat: {"items": list(info["items"]), "rate": info["rate"]}
+            for cat, info in DEFAULT_PROD_MGMT_CATEGORIES.items()
+        }
+
+    prod_mgmt_categories = st.session_state[PROD_MGMT_SETTINGS_KEY]
+
+    # 카테고리 관리 UI
+    with st.expander("카테고리 관리 (추가/수정/삭제)", expanded=False):
+        # 새 카테고리 추가
+        st.markdown("##### 새 카테고리 추가")
+        col_new_name, col_new_rate, col_new_btn = st.columns([3, 1, 1])
+        with col_new_name:
+            new_cat_name = st.text_input("카테고리명", key="new_cat_name", placeholder="예: 신규카테고리")
+        with col_new_rate:
+            new_cat_rate = st.number_input("비율(%)", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="new_cat_rate")
+        with col_new_btn:
+            st.write("")
+            if st.button("➕ 추가", key="add_cat_btn"):
+                if new_cat_name and new_cat_name not in prod_mgmt_categories:
+                    prod_mgmt_categories[new_cat_name] = {"items": [], "rate": new_cat_rate}
+                    st.session_state[PROD_MGMT_SETTINGS_KEY] = prod_mgmt_categories
+                    st.success(f"'{new_cat_name}' 카테고리 추가됨")
+                    st.rerun()
+                elif new_cat_name in prod_mgmt_categories:
+                    st.error("이미 존재하는 카테고리명입니다.")
+
+        st.markdown("---")
+
+        # 기존 카테고리 삭제
+        st.markdown("##### 카테고리 삭제")
+        if prod_mgmt_categories:
+            cat_to_delete = st.selectbox(
+                "삭제할 카테고리",
+                options=list(prod_mgmt_categories.keys()),
+                key="cat_to_delete"
+            )
+            if st.button("🗑️ 선택 카테고리 삭제", key="delete_cat_btn"):
+                if cat_to_delete in prod_mgmt_categories:
+                    del prod_mgmt_categories[cat_to_delete]
+                    st.session_state[PROD_MGMT_SETTINGS_KEY] = prod_mgmt_categories
+                    st.success(f"'{cat_to_delete}' 카테고리 삭제됨")
+                    st.rerun()
+
+        # 기본값으로 초기화
+        st.markdown("---")
+        if st.button("🔄 기본 카테고리로 초기화", key="reset_cat_btn"):
+            st.session_state[PROD_MGMT_SETTINGS_KEY] = {
+                cat: {"items": list(info["items"]), "rate": info["rate"]}
+                for cat, info in DEFAULT_PROD_MGMT_CATEGORIES.items()
+            }
+            st.success("기본 카테고리로 초기화됨")
+            st.rerun()
+
+    # 카테고리별 설정 UI
+    st.markdown("#### 카테고리별 비율 및 포함 항목 설정")
+
+    # 각 카테고리별 설정
+    updated_categories = {}
+
+    for cat_name, cat_info in prod_mgmt_categories.items():
+        with st.expander(f"📁 {cat_name}", expanded=True):
+            col_rate, col_info = st.columns([1, 3])
+
+            with col_rate:
+                rate = st.number_input(
+                    "비율(%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(cat_info.get("rate", 0.0)),
+                    step=0.5,
+                    key=f"rate_{cat_name}"
+                )
+
+            # 현재 카테고리에 매칭되는 항목 찾기
+            matched_items = []
+            unmatched_items = []
+            cat_items = cat_info.get("items", [])
+
+            for item_key, 품목, 사양, 금액 in available_items:
+                is_matched = False
+                for pattern_품목, pattern_사양 in cat_items:
+                    if item_matches_pattern(품목, 사양, pattern_품목, pattern_사양):
+                        is_matched = True
+                        break
+                if is_matched:
+                    matched_items.append((item_key, 품목, 사양, 금액))
+                else:
+                    unmatched_items.append((item_key, 품목, 사양, 금액))
+
+            with col_info:
+                matched_total = sum(금액 for _, _, _, 금액 in matched_items)
+                mgmt_fee = matched_total * (rate / 100.0)
+                st.markdown(f"**소계:** {matched_total:,.0f}원 → **생산관리비:** {mgmt_fee:,.0f}원")
+
+            # 포함 항목 표시 및 편집
+            st.markdown("**포함 항목:**")
+
+            # 패턴 기반 항목 표시
+            if cat_items:
+                pattern_strs = []
+                for p_품목, p_사양 in cat_items:
+                    if p_사양:
+                        pattern_strs.append(f"{p_품목}({p_사양})")
+                    else:
+                        pattern_strs.append(f"{p_품목}(전체)")
+                st.caption(f"패턴: {', '.join(pattern_strs)}")
+
+            # 실제 매칭된 항목 표시
+            if matched_items:
+                matched_df = pd.DataFrame([
+                    {"품목": 품목, "사양": 사양, "금액": f"{금액:,.0f}"}
+                    for _, 품목, 사양, 금액 in matched_items
+                ])
+                st.dataframe(matched_df, use_container_width=True, hide_index=True, height=min(150, 35 * (len(matched_items) + 1)))
+            else:
+                st.info("매칭된 항목 없음")
+
+            # 항목 추가/제거 (패턴 편집)
+            st.markdown("**패턴 편집:**")
+            col_add_pattern, col_remove_pattern = st.columns(2)
+
+            with col_add_pattern:
+                # 추가할 품목 선택
+                unique_품목s = list(set(품목 for _, 품목, _, _ in available_items))
+                add_품목 = st.selectbox(f"품목 선택", options=[""] + unique_품목s, key=f"add_품목_{cat_name}")
+
+                if add_품목:
+                    # 해당 품목의 사양 목록
+                    품목_사양s = [사양 for _, 품목, 사양, _ in available_items if 품목 == add_품목]
+                    add_사양_option = st.selectbox(
+                        "사양 범위",
+                        options=["전체(품목 전체 포함)"] + 품목_사양s,
+                        key=f"add_사양_{cat_name}"
+                    )
+
+                    if st.button("➕ 패턴 추가", key=f"add_pattern_btn_{cat_name}"):
+                        if add_사양_option == "전체(품목 전체 포함)":
+                            new_pattern = (add_품목, None)
+                        else:
+                            new_pattern = (add_품목, add_사양_option)
+
+                        if new_pattern not in cat_items:
+                            cat_items.append(new_pattern)
+                            prod_mgmt_categories[cat_name]["items"] = cat_items
+                            st.session_state[PROD_MGMT_SETTINGS_KEY] = prod_mgmt_categories
+                            st.success(f"패턴 추가됨")
+                            st.rerun()
+
+            with col_remove_pattern:
+                if cat_items:
+                    pattern_options = []
+                    for p_품목, p_사양 in cat_items:
+                        if p_사양:
+                            pattern_options.append(f"{p_품목}({p_사양})")
+                        else:
+                            pattern_options.append(f"{p_품목}(전체)")
+
+                    remove_pattern_str = st.selectbox(
+                        "제거할 패턴",
+                        options=pattern_options,
+                        key=f"remove_pattern_{cat_name}"
+                    )
+
+                    if st.button("➖ 패턴 제거", key=f"remove_pattern_btn_{cat_name}"):
+                        # 패턴 문자열을 다시 튜플로 변환
+                        idx = pattern_options.index(remove_pattern_str)
+                        cat_items.pop(idx)
+                        prod_mgmt_categories[cat_name]["items"] = cat_items
+                        st.session_state[PROD_MGMT_SETTINGS_KEY] = prod_mgmt_categories
+                        st.success(f"패턴 제거됨")
+                        st.rerun()
+
+            updated_categories[cat_name] = {
+                "items": cat_items,
+                "rate": rate
+            }
+
+    # 설정 업데이트
+    st.session_state[PROD_MGMT_SETTINGS_KEY] = updated_categories
+    prod_mgmt_categories = updated_categories
+
+    # ----------------------------
+    # 생산관리비 카테고리별 합계 계산 및 표시
+    # ----------------------------
+    st.markdown("---")
+    st.markdown("#### 생산관리비 카테고리별 합계")
+
+    # 각 항목이 어느 카테고리에 속하는지 매핑
+    item_to_category = {}
+    for item_key, 품목, 사양, 금액 in available_items:
+        for cat_name, cat_info in prod_mgmt_categories.items():
+            for pattern_품목, pattern_사양 in cat_info.get("items", []):
+                if item_matches_pattern(품목, 사양, pattern_품목, pattern_사양):
+                    item_to_category[item_key] = cat_name
+                    break
+            if item_key in item_to_category:
+                break
+        if item_key not in item_to_category:
+            item_to_category[item_key] = "미분류"
+
+    # 카테고리별 소계 계산
+    category_subtotals = {cat_name: 0.0 for cat_name in prod_mgmt_categories.keys()}
+    category_subtotals["미분류"] = 0.0
+
+    for item_key, 품목, 사양, 금액 in available_items:
+        cat = item_to_category.get(item_key, "미분류")
+        category_subtotals[cat] += 금액
+
+    # 생산관리비 계산
+    category_mgmt_fees = {}
+    total_mgmt_fee = 0.0
+
+    for cat_name, subtotal in category_subtotals.items():
+        if cat_name == "미분류":
+            rate = 0.0
+        else:
+            rate = prod_mgmt_categories.get(cat_name, {}).get("rate", 0.0)
+        mgmt_fee = subtotal * (rate / 100.0)
+        category_mgmt_fees[cat_name] = mgmt_fee
+        total_mgmt_fee += mgmt_fee
+
+    # 표 형식으로 표시
+    mgmt_summary_data = []
+    for cat_name in list(prod_mgmt_categories.keys()) + (["미분류"] if category_subtotals.get("미분류", 0) > 0 else []):
+        subtotal = category_subtotals.get(cat_name, 0)
+        if cat_name == "미분류":
+            rate = 0.0
+        else:
+            rate = prod_mgmt_categories.get(cat_name, {}).get("rate", 0.0)
+        mgmt_fee = category_mgmt_fees.get(cat_name, 0)
+        total_with_mgmt = subtotal + mgmt_fee
+        mgmt_summary_data.append({
+            "카테고리": cat_name,
+            "소계": f"{subtotal:,.0f}",
+            "비율(%)": f"{rate:.1f}",
+            "생산관리비": f"{mgmt_fee:,.0f}",
+            "총계": f"{total_with_mgmt:,.0f}",
+        })
+
+    mgmt_summary_df = pd.DataFrame(mgmt_summary_data)
+    st.dataframe(mgmt_summary_df, use_container_width=True, hide_index=True)
+
+    # 최종 총계
+    final_total = grand_total + total_mgmt_fee
+    col_sub, col_mgmt, col_final = st.columns(3)
+    with col_sub:
+        st.metric("원가 소계", f"{grand_total:,.0f} 원")
+    with col_mgmt:
+        st.metric("생산관리비 합계", f"{total_mgmt_fee:,.0f} 원")
+    with col_final:
+        st.metric("최종 총계", f"{final_total:,.0f} 원")
 
     # ----------------------------
     # 세대 타입 저장 기능
@@ -748,17 +1090,29 @@ if rows:
             disabled=save_disabled,
             help="최대 10개까지 저장 가능"
         ):
-            # 현재 견적 데이터 저장
+            # 현재 견적 데이터 저장 (생산관리비 정보 포함)
+            # prod_mgmt_settings의 items를 리스트로 변환 (튜플은 JSON 직렬화 문제)
+            serializable_settings = {}
+            for k, v in prod_mgmt_categories.items():
+                serializable_settings[k] = {
+                    "items": [list(item) for item in v.get("items", [])],
+                    "rate": v.get("rate", 0.0)
+                }
             quotation_data = {
                 "name": type_name,
                 "spec": current_spec,
                 "units": current_units,
                 "rows": rows.copy(),  # 견적 항목 목록
-                "total": grand_total,
+                "total": grand_total,  # 원가 소계
+                "total_mgmt_fee": total_mgmt_fee,  # 생산관리비 합계
+                "final_total": final_total,  # 최종 총계 (원가 + 생산관리비)
+                "category_subtotals": dict(category_subtotals),  # 카테고리별 소계
+                "category_mgmt_fees": dict(category_mgmt_fees),  # 카테고리별 생산관리비
+                "prod_mgmt_settings": serializable_settings,  # 생산관리비 설정
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             st.session_state[SAVED_QUOTATIONS_KEY].append(quotation_data)
-            st.success(f"✅ '{type_name}' 저장 완료! (규격: {current_spec}, {current_units}세대)")
+            st.success(f"✅ '{type_name}' 저장 완료! (규격: {current_spec}, {current_units}세대, 최종단가: {final_total:,.0f}원)")
             st.rerun()
 
     # 저장된 세대 타입 목록 표시
@@ -766,15 +1120,17 @@ if rows:
     if saved_list:
         st.markdown("#### 저장된 세대 타입 목록")
 
-        # 테이블 형식으로 표시
+        # 테이블 형식으로 표시 (생산관리비 포함)
         saved_df = pd.DataFrame([
             {
                 "번호": i + 1,
                 "타입명": q["name"],
                 "규격": q["spec"],
                 "세대수": q["units"],
-                "세대당 단가": f"{q['total']:,.0f}",
-                "총 금액": f"{q['total'] * q['units']:,.0f}",
+                "원가 소계": f"{q['total']:,.0f}",
+                "생산관리비": f"{q.get('total_mgmt_fee', 0):,.0f}",
+                "세대당 최종단가": f"{q.get('final_total', q['total']):,.0f}",
+                "총 금액": f"{q.get('final_total', q['total']) * q['units']:,.0f}",
             }
             for i, q in enumerate(saved_list)
         ])
@@ -800,15 +1156,25 @@ if rows:
                 st.success("전체 삭제 완료!")
                 st.rerun()
 
-        # 총 세대수 및 총 금액 합계
+        # 총 세대수 및 총 금액 합계 (생산관리비 포함)
         total_all_units = sum(q["units"] for q in saved_list)
-        total_all_amount = sum(q["total"] * q["units"] for q in saved_list)
-        st.markdown(f"**총 세대수: {total_all_units}세대 | 총 금액: {total_all_amount:,.0f}원**")
+        total_all_amount = sum(q.get("final_total", q["total"]) * q["units"] for q in saved_list)
+        total_all_cost = sum(q["total"] * q["units"] for q in saved_list)
+        total_all_mgmt = sum(q.get("total_mgmt_fee", 0) * q["units"] for q in saved_list)
+        st.markdown(f"**총 세대수: {total_all_units}세대 | 원가합계: {total_all_cost:,.0f}원 | 생산관리비합계: {total_all_mgmt:,.0f}원 | 최종합계: {total_all_amount:,.0f}원**")
 
     st.markdown("---")
 
     # Excel 다운로드 (LGE 창원 스마트파크 형식)
-    def df_to_excel_bytes(df: pd.DataFrame, total_units: int = 1) -> bytes:
+    def df_to_excel_bytes(
+        df: pd.DataFrame,
+        total_units: int = 1,
+        category_subtotals: dict = None,
+        category_mgmt_fees: dict = None,
+        prod_mgmt_settings: dict = None,
+        total_mgmt_fee: float = 0.0,
+        final_total: float = 0.0,
+    ) -> bytes:
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -1040,6 +1406,135 @@ if rows:
         ws.cell(row=row_num, column=START_COL + 7).alignment = right_align
         ws.cell(row=row_num, column=START_COL + 7).border = thin_border
         ws.cell(row=row_num, column=START_COL + 7).number_format = "#,##0"
+        row_num += 1
+
+        # ----------------------------
+        # 생산관리비 카테고리별 합계 섹션
+        # ----------------------------
+        if category_subtotals and prod_mgmt_settings:
+            row_num += 1  # 빈 행
+
+            # 생산관리비 섹션 제목
+            ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=START_COL + 7)
+            ws.cell(row=row_num, column=START_COL).value = "생산관리비 카테고리별 합계"
+            ws.cell(row=row_num, column=START_COL).font = subtitle_font
+            ws.cell(row=row_num, column=START_COL).alignment = center_align
+            row_num += 1
+
+            # 헤더 행
+            mgmt_headers = ["카테고리", "", "소계", "비율(%)", "생산관리비", "", "", "총계"]
+            for idx, h in enumerate(mgmt_headers):
+                cell = ws.cell(row=row_num, column=START_COL + idx)
+                cell.value = h
+                cell.font = header_font
+                cell.alignment = center_align
+                cell.border = thin_border
+            row_num += 1
+
+            # 카테고리별 데이터
+            for cat_name, cat_info in prod_mgmt_settings.items():
+                subtotal = category_subtotals.get(cat_name, 0)
+                rate = cat_info.get("rate", 0.0)
+                mgmt_fee = category_mgmt_fees.get(cat_name, 0) if category_mgmt_fees else 0
+                cat_total = subtotal + mgmt_fee
+
+                # 카테고리명 (2칸 병합)
+                ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=START_COL + 1)
+                ws.cell(row=row_num, column=START_COL).value = cat_name
+                ws.cell(row=row_num, column=START_COL).font = data_font
+                ws.cell(row=row_num, column=START_COL).alignment = left_align
+                ws.cell(row=row_num, column=START_COL).border = thin_border
+                ws.cell(row=row_num, column=START_COL + 1).border = thin_border
+
+                # 소계
+                ws.cell(row=row_num, column=START_COL + 2).value = subtotal
+                ws.cell(row=row_num, column=START_COL + 2).font = data_font
+                ws.cell(row=row_num, column=START_COL + 2).alignment = right_align
+                ws.cell(row=row_num, column=START_COL + 2).border = thin_border
+                ws.cell(row=row_num, column=START_COL + 2).number_format = "#,##0"
+
+                # 비율
+                ws.cell(row=row_num, column=START_COL + 3).value = rate
+                ws.cell(row=row_num, column=START_COL + 3).font = data_font
+                ws.cell(row=row_num, column=START_COL + 3).alignment = right_align
+                ws.cell(row=row_num, column=START_COL + 3).border = thin_border
+                ws.cell(row=row_num, column=START_COL + 3).number_format = "0.0"
+
+                # 생산관리비
+                ws.cell(row=row_num, column=START_COL + 4).value = mgmt_fee
+                ws.cell(row=row_num, column=START_COL + 4).font = data_font
+                ws.cell(row=row_num, column=START_COL + 4).alignment = right_align
+                ws.cell(row=row_num, column=START_COL + 4).border = thin_border
+                ws.cell(row=row_num, column=START_COL + 4).number_format = "#,##0"
+
+                # 빈 칸
+                ws.cell(row=row_num, column=START_COL + 5).value = ""
+                ws.cell(row=row_num, column=START_COL + 5).border = thin_border
+                ws.cell(row=row_num, column=START_COL + 6).value = ""
+                ws.cell(row=row_num, column=START_COL + 6).border = thin_border
+
+                # 총계
+                ws.cell(row=row_num, column=START_COL + 7).value = cat_total
+                ws.cell(row=row_num, column=START_COL + 7).font = data_font
+                ws.cell(row=row_num, column=START_COL + 7).alignment = right_align
+                ws.cell(row=row_num, column=START_COL + 7).border = thin_border
+                ws.cell(row=row_num, column=START_COL + 7).number_format = "#,##0"
+
+                row_num += 1
+
+            # 생산관리비 합계 행
+            ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=START_COL + 1)
+            ws.cell(row=row_num, column=START_COL).value = "생산관리비 합계"
+            ws.cell(row=row_num, column=START_COL).font = header_font
+            ws.cell(row=row_num, column=START_COL).alignment = center_align
+            ws.cell(row=row_num, column=START_COL).border = thin_border
+            ws.cell(row=row_num, column=START_COL + 1).border = thin_border
+
+            for col in [START_COL + 2, START_COL + 3]:
+                ws.cell(row=row_num, column=col).value = ""
+                ws.cell(row=row_num, column=col).border = thin_border
+
+            ws.cell(row=row_num, column=START_COL + 4).value = total_mgmt_fee
+            ws.cell(row=row_num, column=START_COL + 4).font = header_font
+            ws.cell(row=row_num, column=START_COL + 4).alignment = right_align
+            ws.cell(row=row_num, column=START_COL + 4).border = thin_border
+            ws.cell(row=row_num, column=START_COL + 4).number_format = "#,##0"
+
+            for col in [START_COL + 5, START_COL + 6]:
+                ws.cell(row=row_num, column=col).value = ""
+                ws.cell(row=row_num, column=col).border = thin_border
+
+            ws.cell(row=row_num, column=START_COL + 7).value = ""
+            ws.cell(row=row_num, column=START_COL + 7).border = thin_border
+            row_num += 1
+
+            # 최종 총계 행
+            row_num += 1
+            ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=START_COL + 3)
+            ws.cell(row=row_num, column=START_COL).value = "최종 총계 (원가 + 생산관리비)"
+            ws.cell(row=row_num, column=START_COL).font = header_font
+            ws.cell(row=row_num, column=START_COL).alignment = center_align
+            ws.cell(row=row_num, column=START_COL).border = thin_border
+            for col in range(START_COL + 1, START_COL + 4):
+                ws.cell(row=row_num, column=col).border = thin_border
+
+            # 세대당 최종
+            ws.cell(row=row_num, column=START_COL + 4).value = final_total
+            ws.cell(row=row_num, column=START_COL + 4).font = header_font
+            ws.cell(row=row_num, column=START_COL + 4).alignment = right_align
+            ws.cell(row=row_num, column=START_COL + 4).border = thin_border
+            ws.cell(row=row_num, column=START_COL + 4).number_format = "#,##0"
+
+            for col in [START_COL + 5, START_COL + 6]:
+                ws.cell(row=row_num, column=col).value = ""
+                ws.cell(row=row_num, column=col).border = thin_border
+
+            # 총 세대 최종
+            ws.cell(row=row_num, column=START_COL + 7).value = final_total * total_units
+            ws.cell(row=row_num, column=START_COL + 7).font = header_font
+            ws.cell(row=row_num, column=START_COL + 7).alignment = right_align
+            ws.cell(row=row_num, column=START_COL + 7).border = thin_border
+            ws.cell(row=row_num, column=START_COL + 7).number_format = "#,##0"
 
         # BytesIO로 저장
         output = io.BytesIO()
@@ -1054,9 +1549,17 @@ if rows:
         inputs = floor_data.get("inputs", {})
         total_units = int(inputs.get("units", 1))
 
-    xlsx_bytes = df_to_excel_bytes(est_df, total_units)
+    xlsx_bytes = df_to_excel_bytes(
+        est_df,
+        total_units,
+        category_subtotals=category_subtotals,
+        category_mgmt_fees=category_mgmt_fees,
+        prod_mgmt_settings=prod_mgmt_categories,
+        total_mgmt_fee=total_mgmt_fee,
+        final_total=final_total,
+    )
     st.download_button(
-        "📥 현재 세대 견적서 다운로드",
+        "📥 현재 세대 견적서 다운로드 (생산관리비 포함)",
         data=xlsx_bytes,
         file_name=f"욕실_원자재_세대당_단가내역_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1332,6 +1835,184 @@ if rows:
         ws.cell(row=row_num, column=remark_col).font = header_font
         ws.cell(row=row_num, column=remark_col).alignment = right_align
         ws.cell(row=row_num, column=remark_col).border = thin_border
+        row_num += 1
+
+        # ----------------------------
+        # 생산관리비 카테고리별 상세 섹션
+        # ----------------------------
+        # 생산관리비 정보가 있는지 확인
+        has_mgmt_fee = any(q.get("total_mgmt_fee", 0) > 0 or q.get("prod_mgmt_settings") for q in saved_quotations)
+
+        if has_mgmt_fee:
+            row_num += 2
+
+            # 생산관리비 섹션 제목
+            ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=remark_col)
+            ws.cell(row=row_num, column=START_COL).value = "생산관리비 카테고리별 상세"
+            ws.cell(row=row_num, column=START_COL).font = header_font
+            ws.cell(row=row_num, column=START_COL).alignment = center_align
+            row_num += 1
+
+            # 첫 번째 저장된 견적의 카테고리 설정 가져오기 (대표값으로 사용)
+            # 모든 세대 타입에서 공통 카테고리 수집
+            all_categories = set()
+            for q in saved_quotations:
+                cat_subtotals = q.get("category_subtotals", {})
+                all_categories.update(cat_subtotals.keys())
+
+            # 카테고리별로 각 세대 타입의 소계, 비율, 생산관리비 표시
+            for cat_name in sorted(all_categories):
+                if cat_name == "미분류":
+                    continue  # 미분류는 마지막에 처리
+
+                # 카테고리명 행
+                ws.cell(row=row_num, column=START_COL).value = cat_name
+                ws.cell(row=row_num, column=START_COL).font = data_font
+                ws.cell(row=row_num, column=START_COL).alignment = left_align
+                ws.cell(row=row_num, column=START_COL).border = thin_border
+                ws.cell(row=row_num, column=SPEC_COL).value = ""
+                ws.cell(row=row_num, column=SPEC_COL).border = thin_border
+
+                cat_total_all = 0
+                for i, q in enumerate(saved_quotations):
+                    col_start = DATA_START_COL + i * 3
+                    cat_subtotals = q.get("category_subtotals", {})
+                    cat_mgmt_fees = q.get("category_mgmt_fees", {})
+                    prod_settings = q.get("prod_mgmt_settings", {})
+
+                    subtotal = cat_subtotals.get(cat_name, 0)
+                    mgmt_fee = cat_mgmt_fees.get(cat_name, 0)
+                    rate = prod_settings.get(cat_name, {}).get("rate", 0) if isinstance(prod_settings.get(cat_name), dict) else 0
+
+                    # 비율
+                    ws.cell(row=row_num, column=col_start).value = f"{rate}%"
+                    ws.cell(row=row_num, column=col_start).font = small_font
+                    ws.cell(row=row_num, column=col_start).alignment = right_align
+                    ws.cell(row=row_num, column=col_start).border = thin_border
+
+                    # 소계
+                    ws.cell(row=row_num, column=col_start + 1).value = subtotal
+                    ws.cell(row=row_num, column=col_start + 1).font = data_font
+                    ws.cell(row=row_num, column=col_start + 1).alignment = right_align
+                    ws.cell(row=row_num, column=col_start + 1).border = thin_border
+                    ws.cell(row=row_num, column=col_start + 1).number_format = "#,##0"
+
+                    # 생산관리비
+                    ws.cell(row=row_num, column=col_start + 2).value = mgmt_fee
+                    ws.cell(row=row_num, column=col_start + 2).font = data_font
+                    ws.cell(row=row_num, column=col_start + 2).alignment = right_align
+                    ws.cell(row=row_num, column=col_start + 2).border = thin_border
+                    ws.cell(row=row_num, column=col_start + 2).number_format = "#,##0"
+
+                    cat_total_all += mgmt_fee * q["units"]
+
+                ws.cell(row=row_num, column=remark_col).value = ""
+                ws.cell(row=row_num, column=remark_col).border = thin_border
+                row_num += 1
+
+            # 미분류 카테고리 (있는 경우)
+            if "미분류" in all_categories:
+                ws.cell(row=row_num, column=START_COL).value = "미분류"
+                ws.cell(row=row_num, column=START_COL).font = data_font
+                ws.cell(row=row_num, column=START_COL).alignment = left_align
+                ws.cell(row=row_num, column=START_COL).border = thin_border
+                ws.cell(row=row_num, column=SPEC_COL).value = "(생산관리비 0%)"
+                ws.cell(row=row_num, column=SPEC_COL).font = small_font
+                ws.cell(row=row_num, column=SPEC_COL).border = thin_border
+
+                for i, q in enumerate(saved_quotations):
+                    col_start = DATA_START_COL + i * 3
+                    cat_subtotals = q.get("category_subtotals", {})
+                    subtotal = cat_subtotals.get("미분류", 0)
+
+                    ws.cell(row=row_num, column=col_start).value = "0%"
+                    ws.cell(row=row_num, column=col_start).font = small_font
+                    ws.cell(row=row_num, column=col_start).alignment = right_align
+                    ws.cell(row=row_num, column=col_start).border = thin_border
+
+                    ws.cell(row=row_num, column=col_start + 1).value = subtotal
+                    ws.cell(row=row_num, column=col_start + 1).font = data_font
+                    ws.cell(row=row_num, column=col_start + 1).alignment = right_align
+                    ws.cell(row=row_num, column=col_start + 1).border = thin_border
+                    ws.cell(row=row_num, column=col_start + 1).number_format = "#,##0"
+
+                    ws.cell(row=row_num, column=col_start + 2).value = 0
+                    ws.cell(row=row_num, column=col_start + 2).font = data_font
+                    ws.cell(row=row_num, column=col_start + 2).alignment = right_align
+                    ws.cell(row=row_num, column=col_start + 2).border = thin_border
+
+                ws.cell(row=row_num, column=remark_col).value = ""
+                ws.cell(row=row_num, column=remark_col).border = thin_border
+                row_num += 1
+
+            # 생산관리비 합계 행
+            row_num += 1
+            ws.cell(row=row_num, column=START_COL).value = "생산관리비 합계"
+            ws.cell(row=row_num, column=START_COL).font = header_font
+            ws.cell(row=row_num, column=START_COL).alignment = center_align
+            ws.cell(row=row_num, column=START_COL).border = thin_border
+            ws.cell(row=row_num, column=SPEC_COL).value = ""
+            ws.cell(row=row_num, column=SPEC_COL).border = thin_border
+
+            total_all_mgmt = 0
+            for i, q in enumerate(saved_quotations):
+                col_start = DATA_START_COL + i * 3
+                mgmt_fee = q.get("total_mgmt_fee", 0)
+                type_mgmt_total = mgmt_fee * q["units"]
+                total_all_mgmt += type_mgmt_total
+
+                ws.cell(row=row_num, column=col_start).value = ""
+                ws.cell(row=row_num, column=col_start).border = thin_border
+
+                ws.cell(row=row_num, column=col_start + 1).value = ""
+                ws.cell(row=row_num, column=col_start + 1).border = thin_border
+
+                ws.cell(row=row_num, column=col_start + 2).value = mgmt_fee
+                ws.cell(row=row_num, column=col_start + 2).font = header_font
+                ws.cell(row=row_num, column=col_start + 2).alignment = right_align
+                ws.cell(row=row_num, column=col_start + 2).border = thin_border
+                ws.cell(row=row_num, column=col_start + 2).number_format = "#,##0"
+
+            ws.cell(row=row_num, column=remark_col).value = f"{total_all_mgmt:,.0f}"
+            ws.cell(row=row_num, column=remark_col).font = header_font
+            ws.cell(row=row_num, column=remark_col).alignment = right_align
+            ws.cell(row=row_num, column=remark_col).border = thin_border
+            row_num += 1
+
+            # 최종 총계 행 (원가 + 생산관리비)
+            row_num += 1
+            ws.cell(row=row_num, column=START_COL).value = "최종 총계"
+            ws.cell(row=row_num, column=START_COL).font = header_font
+            ws.cell(row=row_num, column=START_COL).alignment = center_align
+            ws.cell(row=row_num, column=START_COL).border = thin_border
+            ws.cell(row=row_num, column=SPEC_COL).value = "(원가 + 생산관리비)"
+            ws.cell(row=row_num, column=SPEC_COL).font = small_font
+            ws.cell(row=row_num, column=SPEC_COL).alignment = left_align
+            ws.cell(row=row_num, column=SPEC_COL).border = thin_border
+
+            final_grand_total = 0
+            for i, q in enumerate(saved_quotations):
+                col_start = DATA_START_COL + i * 3
+                final_per_unit = q.get("final_total", q["total"])
+                type_final_total = final_per_unit * q["units"]
+                final_grand_total += type_final_total
+
+                ws.cell(row=row_num, column=col_start).value = ""
+                ws.cell(row=row_num, column=col_start).border = thin_border
+
+                ws.cell(row=row_num, column=col_start + 1).value = ""
+                ws.cell(row=row_num, column=col_start + 1).border = thin_border
+
+                ws.cell(row=row_num, column=col_start + 2).value = final_per_unit
+                ws.cell(row=row_num, column=col_start + 2).font = header_font
+                ws.cell(row=row_num, column=col_start + 2).alignment = right_align
+                ws.cell(row=row_num, column=col_start + 2).border = thin_border
+                ws.cell(row=row_num, column=col_start + 2).number_format = "#,##0"
+
+            ws.cell(row=row_num, column=remark_col).value = f"{final_grand_total:,.0f}"
+            ws.cell(row=row_num, column=remark_col).font = header_font
+            ws.cell(row=row_num, column=remark_col).alignment = right_align
+            ws.cell(row=row_num, column=remark_col).border = thin_border
 
         # 컬럼 너비 설정
         ws.column_dimensions[get_column_letter(START_COL)].width = 12

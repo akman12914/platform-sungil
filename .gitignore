@@ -52,3 +52,7 @@ Thumbs.db
 # FAISS Index
 faiss_index/
 *.index
+
+# documents
+erp-docs/
+er-meterials/

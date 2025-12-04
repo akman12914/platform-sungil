@@ -32,7 +32,6 @@ BUCKETS = ["≤49", "≤99", "≤149", "≤199", "≤299", "≥300"]
 
 # ★ 사이드바에서 조절할 옵션 (기본값)
 include_meals = True          # 식대·숙박비 포함 여부
-include_oji_extra = True      # 유류비(오지) 추가비 포함 여부
 
 def parse_code_to_area(code: str) -> float:
     """
@@ -247,15 +246,42 @@ def _parse_ppe_summary_250905(df: pd.DataFrame):
 def _make_adjust_default_table() -> pd.DataFrame:
     """
     형상/세대유형 보정 기본값 (엑셀 설명문 기반)
-    - 사각형: 코너형 기준 +10,000
-    - 주거약자: 코너형 기준 +30,000 (사각형이면 +40,000)
+
+    - GRP, PP/PE (PVE):
+        · 코너형 일반세대:  기준단가 그대로
+        · 사각형 일반세대:  코너형 일반세대 기준 +10,000원
+        · 코너형 주거약자: 코너형 일반세대 기준 +30,000원
+        · 사각형 주거약자: 코너형 일반세대 기준 +40,000원
+
+    - FRP:
+        · 코너형 일반세대: GRP 코너형 일반세대 기준 +10,000원
+        · 사각형 일반세대: GRP 코너형 일반세대 기준 +20,000원
+        · 코너형 주거약자: GRP 코너형 일반세대 기준 +40,000원
+        · 사각형 주거약자: GRP 코너형 일반세대 기준 +50,000원
+
+    ※ 코드에서는 GRP 코너형 일반세대 기준단가를 base로 두고,
+       위 금액들을 전부 delta(보정금액)로 표현합니다.
     """
     rows = []
-    for mat in ["GRP", "FRP", "PP/PE"]:
-        rows.append({"material": mat, "shape": "코너형", "user_type": "일반", "delta": 0})
-        rows.append({"material": mat, "shape": "사각형", "user_type": "일반", "delta": 10000})
-        rows.append({"material": mat, "shape": "코너형", "user_type": "주거약자", "delta": 30000})
-        rows.append({"material": mat, "shape": "사각형", "user_type": "주거약자", "delta": 40000})
+
+    # GRP: 엑셀 "GRP 바닥판(코너형, 일반세대) 기준" 메모 그대로
+    rows.append({"material": "GRP",   "shape": "코너형", "user_type": "일반",   "delta": 0})
+    rows.append({"material": "GRP",   "shape": "사각형", "user_type": "일반",   "delta": 10000})
+    rows.append({"material": "GRP",   "shape": "코너형", "user_type": "주거약자", "delta": 30000})
+    rows.append({"material": "GRP",   "shape": "사각형", "user_type": "주거약자", "delta": 40000})
+
+    # FRP: 엑셀 "◎ FRP 바닥판일때 설치비" 메모대로 GRP 기준 대비 보정
+    rows.append({"material": "FRP",   "shape": "코너형", "user_type": "일반",   "delta": 10000})
+    rows.append({"material": "FRP",   "shape": "사각형", "user_type": "일반",   "delta": 20000})
+    rows.append({"material": "FRP",   "shape": "코너형", "user_type": "주거약자", "delta": 40000})
+    rows.append({"material": "FRP",   "shape": "사각형", "user_type": "주거약자", "delta": 50000})
+
+    # PP/PE (PVE): 엑셀 "PVE 바닥판(코너형, 일반세대) 기준" 메모가 GRP와 동일 규칙
+    rows.append({"material": "PP/PE", "shape": "코너형", "user_type": "일반",   "delta": 0})
+    rows.append({"material": "PP/PE", "shape": "사각형", "user_type": "일반",   "delta": 10000})
+    rows.append({"material": "PP/PE", "shape": "코너형", "user_type": "주거약자", "delta": 30000})
+    rows.append({"material": "PP/PE", "shape": "사각형", "user_type": "주거약자", "delta": 40000})
+
     return pd.DataFrame(rows)
 
 
@@ -622,7 +648,17 @@ with st.sidebar:
     units = st.number_input("세대수 (프로젝트 전체)", min_value=1, step=1, value=49)
     material = st.selectbox("재질", ["GRP", "FRP", "PP/PE"], index=0)
     shape = st.selectbox("형상", ["코너형", "사각형"], index=0)
-    user_type = st.selectbox("세대유형", ["일반", "주거약자"], index=0)
+
+    # ★ 주거약자 라디오 버튼 (엑셀의 "일반세대 / 주거약자 세대" 대응)
+    user_type_label = st.radio(
+        "세대유형",
+        ["일반세대", "주거약자 세대"],
+        index=0,
+        horizontal=True,
+    )
+
+    # 내부 계산용 코드는 기존처럼 "일반" / "주거약자" 문자열 사용
+    user_type = "일반" if user_type_label.startswith("일반") else "주거약자"
     code = st.text_input("규격 코드 (예: 1520, 1623...)", value="1520")
     area = st.number_input("면적(㎡)", value=float(parse_code_to_area(code)), help="규격코드에서 자동 계산값. 수동 수정 가능.")
     region = st.selectbox("지역", ["수도권", "지방", "제주"], index=0)
@@ -633,13 +669,6 @@ with st.sidebar:
         "식대·숙박비 포함 합계(세대) 기준단가",
         value=True,
         help="체크 시 crew·식대·숙박비·일수를 반영한 숙식비를 세대당 인건비에 포함합니다."
-    )
-
-    # ★ 유류비(오지) 추가비 포함 여부
-    include_oji_extra = st.checkbox(
-        "유류비(오지) 추가비 포함",
-        value=True,
-        help="체크 시 외곽/오지 차량 유류비를 세대당 인건비에 포함합니다."
     )
 
     bucket = get_bucket(int(units))

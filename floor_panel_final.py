@@ -124,12 +124,6 @@ with st.sidebar:
             L = st.number_input("욕실 길이 L (가로, 밑변)", min_value=400, step=10, value=2100)
             W = st.number_input("욕실 폭   W (세로)",       min_value=400, step=10, value=1400)
 
-    st.header("④ 관리비율 설정")
-    prod_rate_pct = st.number_input("생산관리비율 rₚ (%)", min_value=0.0, max_value=99.9, value=25.0, step=0.5)
-    sales_rate_pct = st.number_input("영업관리비율 rₛ (%)", min_value=0.0, max_value=30.0, value=20.0, step=0.5)
-    r_p = prod_rate_pct / 100.0
-    r_s = sales_rate_pct / 100.0
-
     st.write("---")
     do_calc = st.button("계산하기", type="primary")
 
@@ -267,36 +261,8 @@ def compute_subtotal_from_row(row: pd.Series) -> Tuple[Optional[int], Optional[i
     # 그래도 없으면 0
     return sink_v, shower_v, 0
 
-def price_blocks_pve(subtotal:int, r_p:float, r_s:float) -> Dict[str,int]:
-    """PVE: 생산관리비 비포함(단순 곱), 영업관리비 포함역산."""
-    prod_fee   = int(round(subtotal * r_p))
-    prod_incl  = int(round(subtotal + prod_fee))
-    sales_fee  = int(round(prod_incl/(1.0 - r_s) - prod_incl)) if r_s > 0 else 0
-    sales_incl = int(round(prod_incl + sales_fee))
-    return {
-        "생산관리비": prod_fee,
-        "생산관리비포함": prod_incl,
-        "영업관리비": sales_fee,
-        "영업관리비포함": sales_incl,
-    }
-
-def price_blocks_grp_frp(subtotal:int, r_p:float, r_s:float) -> Dict[str,int]:
-    """GRP/FRP: 생산관리비 포함역산, 영업관리비 포함역산."""
-    if r_p >= 1.0:
-        raise ZeroDivisionError("생산관리비율은 100% 미만이어야 합니다.")
-    prod_incl = int(round(subtotal / (1.0 - r_p))) if r_p > 0 else int(subtotal)
-    prod_fee  = int(round(prod_incl - subtotal))
-    sales_fee = int(round(prod_incl/(1.0 - r_s) - prod_incl)) if r_s > 0 else 0
-    sales_incl = int(round(prod_incl + sales_fee))
-    return {
-        "생산관리비": prod_fee,
-        "생산관리비포함": prod_incl,
-        "영업관리비": sales_fee,
-        "영업관리비포함": sales_incl,
-    }
-
-def pve_quote(W:int, L:int, is_access:bool, r_p:float, r_s:float, pve_process_cost:Optional[int]) -> Dict[str,int|str]:
-    """PVE 원가 산정 + 관리비 블록."""
+def pve_quote(W:int, L:int, is_access:bool, pve_process_cost:Optional[int]) -> Dict[str,int|str]:
+    """PVE 원가 산정 (소계만 반환)."""
     add = 480 if is_access else 380
     Wm = (W + add) / 1000.0
     Lm = (L + add) / 1000.0
@@ -304,13 +270,11 @@ def pve_quote(W:int, L:int, is_access:bool, r_p:float, r_s:float, pve_process_co
     raw = int(round(area * 12000))  # ㎡당 12,000원
     process = int(pve_process_cost) if pve_process_cost is not None else 24331
     subtotal = raw + process
-    blocks = price_blocks_pve(subtotal, r_p, r_s)
     return {
         "소재": "PVE",
         "원재료비": raw,
         "가공비": process,
         "소계": subtotal,
-        **blocks
     }
 
 def match_exact(df: pd.DataFrame,
@@ -504,9 +468,6 @@ if units < 1:
     st.error("세대수는 1 이상이어야 합니다.")
     st.stop()
 
-if r_p >= 1.0:
-    st.error("생산관리비율 rₚ 는 100% 미만이어야 합니다.")
-    st.stop()
 
 # GRP 기본형 + 경계=구분 인 경우에만 세면/샤워 치수 체크
 if user_type == "기본형" and boundary == "구분" and (
@@ -531,7 +492,6 @@ if units < 100:
     pve = pve_quote(
         W, L,
         is_access=(is_access == "예(주거약자)"),
-        r_p=r_p, r_s=sales_rate_pct/100.0,
         pve_process_cost=pve_process_cost
     )
     result = {
@@ -539,10 +499,6 @@ if units < 100:
         "세면부단가": None,
         "샤워부단가": None,
         "소계": pve["소계"],
-        "생산관리비": pve["생산관리비"],
-        "생산관리비포함": pve["생산관리비포함"],
-        "영업관리비": pve["영업관리비"],
-        "영업관리비포함": pve["영업관리비포함"],
     }
 
 else:
@@ -566,13 +522,11 @@ else:
         if user_type == "기본형":
             decision_log.append("GRP 기본/코너형 매칭 성공 (완전일치)")
             sink, shower, subtotal = compute_subtotal_from_row(r_grp)
-            base_pb = price_blocks_grp_frp(subtotal, r_p, sales_rate_pct/100.0)
             base_grp_result = {
                 "소재": "GRP",
                 "세면부단가": sink,
                 "샤워부단가": shower,
                 "소계": subtotal,
-                **base_pb,
             }
 
             # 같은 욕실 크기의 GRP 일체형 찾기
@@ -584,13 +538,11 @@ else:
                     integrated_match["샤워부단가"],
                     integrated_match["소계"],
                 )
-                int_pb = price_blocks_grp_frp(subtotal2, r_p, sales_rate_pct/100.0)
                 integrated_grp_result = {
                     "소재": "GRP",
                     "세면부단가": sink2,
                     "샤워부단가": shower2,
                     "소계": subtotal2,
-                    **int_pb,
                 }
             else:
                 decision_log.append("같은 욕실 크기의 GRP 일체형 없음")
@@ -599,13 +551,11 @@ else:
             # 중앙배수, 타일일체형 등: 대체 없이 그대로 사용
             decision_log.append("GRP 매칭 성공 (완전일치, 대체 없음)")
             sink, shower, subtotal = compute_subtotal_from_row(r_grp)
-            pb = price_blocks_grp_frp(subtotal, r_p, sales_rate_pct/100.0)
             result = {
                 "소재": "GRP",
                 "세면부단가": sink,
                 "샤워부단가": shower,
                 "소계": subtotal,
-                **pb,
             }
 
     else:
@@ -619,13 +569,11 @@ else:
         if r_frp is not None:
             decision_log.append("FRP 매칭 성공 (완전일치)")
             sink, shower, subtotal = compute_subtotal_from_row(r_frp)
-            pb = price_blocks_grp_frp(subtotal, r_p, sales_rate_pct/100.0)
             result = {
                 "소재": "FRP",
                 "세면부단가": sink,
                 "샤워부단가": shower,
                 "소계": subtotal,
-                **pb,
             }
         else:
             decision_log.append("FRP 매칭 실패")
@@ -637,7 +585,6 @@ else:
             pve = pve_quote(
                 W, L,
                 is_access=(is_access == "예(주거약자)"),
-                r_p=r_p, r_s=sales_rate_pct/100.0,
                 pve_process_cost=pve_process_cost
             )
             result = {
@@ -645,10 +592,6 @@ else:
                 "세면부단가": None,
                 "샤워부단가": None,
                 "소계": pve["소계"],
-                "생산관리비": pve["생산관리비"],
-                "생산관리비포함": pve["생산관리비포함"],
-                "영업관리비": pve["영업관리비"],
-                "영업관리비포함": pve["영업관리비포함"],
             }
 
 # =========================================
@@ -732,13 +675,7 @@ if result["세면부단가"] is not None:
 if result["샤워부단가"] is not None:
     result_data.append({"항목": "샤워부바닥판 단가", "값": f"{result['샤워부단가']:,} 원"})
 
-result_data.extend([
-    {"항목": "소계", "값": f"{result['소계']:,} 원"},
-    {"항목": f"생산관리비({prod_rate_pct:.1f}%)", "값": f"{result['생산관리비']:,} 원"},
-    {"항목": "생산관리비 포함", "값": f"{result['생산관리비포함']:,} 원"},
-    {"항목": f"영업관리비({sales_rate_pct:.1f}%)", "값": f"{result['영업관리비']:,} 원"},
-    {"항목": "영업관리비 포함(최종)", "값": f"{result['영업관리비포함']:,} 원"},
-])
+result_data.append({"항목": "소계", "값": f"{result['소계']:,} 원"})
 
 # 표로 표시
 result_df = pd.DataFrame(result_data)
@@ -776,10 +713,6 @@ floor_payload = {
     "세면부바닥판 단가": (int(result["세면부단가"]) if result.get("세면부단가") is not None else None),
     "샤워부바닥판 단가": (int(result["샤워부단가"]) if result.get("샤워부단가") is not None else None),
     "소계": int(result["소계"]),
-    "생산관리비": int(result["생산관리비"]),
-    "생산관리비포함단가": int(result["생산관리비포함"]),
-    "영업관리비": int(result["영업관리비"]),
-    "영업관리비포함단가": int(result["영업관리비포함"]),
 }
 
 # 세션 상태에 결과 저장
@@ -798,8 +731,6 @@ st.session_state[FLOOR_RESULT_KEY] = {
         "sl": sl,
         "shw": shw,
         "shl": shl,
-        "r_p": r_p,
-        "r_s": r_s,
     },
     "result": floor_payload,
     "decision_log": decision_log,

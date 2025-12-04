@@ -1675,14 +1675,6 @@ with st.sidebar:
     else:
         bath_type = st.radio("욕실유형", ["사각형 욕실", "코너형 욕실"], horizontal=False)
 
-    st.header("계산 옵션 / 관리비율")
-
-    prod_rate_pct = st.number_input("생산관리비율 rₚ (%)",
-                                    min_value=0.0, max_value=80.0,
-                                    value=20.0, step=0.5, help="예: 20 → 20%")
-    sales_rate_pct = st.number_input("영업관리비율 rₛ (%)",
-                                     min_value=0.0, max_value=80.0,
-                                     value=20.0, step=0.5, help="예: 20 → 20%")
 
 # -------- read Excel file (shared state only) ----------
 # 바닥판에서 공유된 Excel 파일 사용
@@ -1974,30 +1966,13 @@ try:
 
     subtotal_sum = body_sub + side_sub + hatch_price * hatch_count
 
-    rp = float(prod_rate_pct) / 100.0
-    rs = float(sales_rate_pct) / 100.0
-    if rp >= 1.0 or rs >= 1.0:
-        st.error("rₚ, rₛ는 100% 미만이어야 합니다.")
-        st.stop()
-
-    prod_mgmt = (subtotal_sum / (1.0 - rp)) - subtotal_sum if rp > 0 else 0.0
-    price_with_prod = subtotal_sum + prod_mgmt
-    sales_mgmt = (price_with_prod / (1.0 - rs)) - price_with_prod if rs > 0 else 0.0
-    final_price = price_with_prod + sales_mgmt
-
-    st.subheader("관리비/최종단가")
+    st.subheader("소계")
     st.dataframe(
         pd.DataFrame([{
             "바디 소계": body_sub,
             "사이드 소계": side_sub,
             "점검구 소계": int(hatch_price * hatch_count),
-            "합계 소계": int(subtotal_sum),
-            "생산관리비": int(round(prod_mgmt)),
-            "생산관리비포함": int(round(price_with_prod)),
-            "영업관리비": int(round(sales_mgmt)),
-            "최종단가": int(round(final_price)),
-            "rₚ(%)": prod_rate_pct,
-            "rₛ(%)": sales_rate_pct,
+            "소계": int(subtotal_sum),
             "자동 점검구": hatch_name or "없음",
         }]),
         use_container_width=True,
@@ -2009,14 +1984,7 @@ try:
         "총개수": int(json_parts_core["총개수"]),
         "총절단": int(json_parts_core["총절단"]),
         "총단가": int(json_parts_core["총단가"]),
-        "관리비": {
-            "합계소계": int(subtotal_sum),
-            "생산관리비율_%": float(prod_rate_pct),
-            "생산관리비": int(round(prod_mgmt)),
-            "영업관리비율_%": float(sales_rate_pct),
-            "영업관리비": int(round(sales_mgmt)),
-            "최종단가": int(round(final_price)),
-        },
+        "소계": int(subtotal_sum),
         "점검구": {"종류": hatch_name or "", "개수": int(hatch_count)},
     }
 
@@ -2044,8 +2012,6 @@ try:
             "section": "ceil",
             "inputs": {
                 "bath_type": bath_type,
-                "prod_rate_pct": prod_rate_pct,
-                "sales_rate_pct": sales_rate_pct,
                 **meta,
             },
             "result": {
@@ -2056,13 +2022,8 @@ try:
                 "elements": (
                     df_elements.to_dict("records") if not df_elements.empty else []
                 ),
-                "management_fees": {
-                    "subtotal_sum": subtotal_sum,
-                    "prod_mgmt": int(round(prod_mgmt)),
-                    "sales_mgmt": int(round(sales_mgmt)),
-                    "final_price": int(round(final_price)),
-                    "hatch_info": {"name": hatch_name, "count": hatch_count, "price": hatch_price},
-                },
+                "소계": int(subtotal_sum),
+                "hatch_info": {"name": hatch_name, "count": hatch_count, "price": hatch_price},
                 "json_export": export_json,
             },
         }

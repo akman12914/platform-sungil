@@ -500,10 +500,8 @@ def compute_cost_for_bathroom(
     bath_length_mm: int,
     *,
     total_labor_cost_per_day: float = TOTAL_LABOR_COST_PER_DAY,
-    production_overhead_rate: float = 0.20,
-    sales_admin_rate: float = 0.20,
 ) -> Dict[str, float]:
-    """벽판넬 치수/수량 + 각수 + 욕실형태 + 욕실규격으로 생산원가계, 생산관리비, 영업관리비까지 계산."""
+    """벽판넬 치수/수량 + 각수 + 욕실형태 + 욕실규격으로 생산원가계(소계) 계산."""
     if frame_grade not in FRAME_UNIT_PRICE:
         raise ValueError(f"지원하지 않는 각수(frame_grade): {frame_grade}")
 
@@ -541,12 +539,6 @@ def compute_cost_for_bathroom(
 
     production_cost = (material_total + labor_per_set + equip_dep + mfg_overhead + tile_mgmt_cost + shipping_rack_cost)
 
-    production_overhead = production_cost * production_overhead_rate
-    cost_with_prod_ovhd = production_cost + production_overhead
-
-    sales_admin_overhead = cost_with_prod_ovhd * sales_admin_rate
-    final_cost = cost_with_prod_ovhd + sales_admin_overhead
-
     return {
         "spec_code": spec_code, "bath_type": bath_type, "frame_grade": frame_grade,
         "total_panels": float(total_panels), "total_area_m2": total_area_m2, "avg_panel_area_m2": avg_panel_area_m2,
@@ -556,9 +548,7 @@ def compute_cost_for_bathroom(
         "daily_production_qty": float(daily_prod_qty), "sets_per_day": sets_per_day, "labor_per_set": labor_per_set,
         "equip_dep": float(equip_dep), "mfg_overhead": float(mfg_overhead),
         "tile_W": tile_W, "tile_mgmt_cost": tile_mgmt_cost, "shipping_rack_cost": float(shipping_rack_cost),
-        "production_cost": production_cost, "production_overhead": production_overhead,
-        "cost_with_production_overhead": cost_with_prod_ovhd,
-        "sales_admin_overhead": sales_admin_overhead, "final_cost": final_cost,
+        "소계": production_cost,
     }
 
 @dataclass
@@ -1228,12 +1218,6 @@ with st.sidebar:
                 j_lower_segments_map[int(j_wall)] = [int(w1), int(w2)]
 
     st.divider()
-    # 생산관리비율, 영업관리비율 입력
-    st.subheader("관리비 비율(%)")
-    rp = st.number_input("생산관리비율 rₚ (%)", min_value=0.0, max_value=50.0, value=20.0, step=0.5)
-    rs = st.number_input("영업관리비율 rₛ (%)", min_value=0.0, max_value=50.0, value=20.0, step=0.5)
-
-    st.divider()
     calc = st.button("계산 & 미리보기", type="primary")
 
 errors: List[str] = []
@@ -1392,8 +1376,6 @@ if shape == "사각형":
                     bath_width_mm=bath_width_mm,
                     bath_length_mm=bath_length_mm,
                     total_labor_cost_per_day=float(total_labor),
-                    production_overhead_rate=rp / 100.0,
-                    sales_admin_rate=rs / 100.0,
                 )
 
                 # ==== 비용 요약 출력 ====
@@ -1430,16 +1412,7 @@ if shape == "사각형":
                 )
                 st.write(f"- 출고 + 렉입고: {int(cost_res['shipping_rack_cost']):,} 원")
 
-                st.write(f"- **생산원가계(AD)**: **{cost_res['production_cost']:,.0f} 원**")
-
-                st.write(
-                    f"- 생산관리비({rp:.1f}%): **{cost_res['production_overhead']:,.0f} 원** "
-                    f"→ 생산관리비 포함: **{cost_res['cost_with_production_overhead']:,.0f} 원**"
-                )
-                st.write(
-                    f"- 영업관리비({rs:.1f}%): **{cost_res['sales_admin_overhead']:,.0f} 원** "
-                    f"→ **최종(영업관리비 포함가)**: **{cost_res['final_cost']:,.0f} 원**"
-                )
+                st.write(f"- **소계**: **{cost_res['소계']:,.0f} 원**")
 
                 # 세션 상태에 결과 저장
                 st.session_state[WALL_RESULT_KEY] = {
@@ -1459,8 +1432,6 @@ if shape == "사각형":
                         "j_h": j_h,
                         "j_depth": j_depth,
                         "j_has_step": j_has_step,
-                        "rp": rp,
-                        "rs": rs,
                         "frame_grade": frame_grade,
                     },
                     "result": cost_res,
@@ -1649,8 +1620,6 @@ else:
                     bath_width_mm=bath_width_mm,
                     bath_length_mm=bath_length_mm,
                     total_labor_cost_per_day=float(total_labor),
-                    production_overhead_rate=rp / 100.0,
-                    sales_admin_rate=rs / 100.0,
                 )
 
                 # ==== 비용 요약 출력 ====
@@ -1687,16 +1656,7 @@ else:
                 )
                 st.write(f"- 출고 + 렉입고: {int(cost_res['shipping_rack_cost']):,} 원")
 
-                st.write(f"- **생산원가계(AD)**: **{cost_res['production_cost']:,.0f} 원**")
-
-                st.write(
-                    f"- 생산관리비({rp:.1f}%): **{cost_res['production_overhead']:,.0f} 원** "
-                    f"→ 생산관리비 포함: **{cost_res['cost_with_production_overhead']:,.0f} 원**"
-                )
-                st.write(
-                    f"- 영업관리비({rs:.1f}%): **{cost_res['sales_admin_overhead']:,.0f} 원** "
-                    f"→ **최종(영업관리비 포함가)**: **{cost_res['final_cost']:,.0f} 원**"
-                )
+                st.write(f"- **소계**: **{cost_res['소계']:,.0f} 원**")
 
                 # 세션 상태에 결과 저장
                 st.session_state[WALL_RESULT_KEY] = {
@@ -1715,8 +1675,6 @@ else:
                         "j_h": j_h,
                         "j_depth": j_depth,
                         "j_has_step": j_has_step,
-                        "rp": rp,
-                        "rs": rs,
                         "frame_grade": frame_grade,
                     },
                     "result": cost_res,
@@ -1752,4 +1710,4 @@ else:
                 st.warning("규칙 적용 실패/제약 위반 벽면")
                 st.dataframe(pd.DataFrame(errs).rename(columns={"face_w":"벽면폭","face_h":"벽면높이"}), use_container_width=True)
 
-st.caption("※ 새 엔진 적용 + 벽판 단가/소계/생산·영업관리비 자동계산 + JSON 내보내기까지 포함.")
+st.caption("※ 새 엔진 적용 + 벽판 단가/소계 자동계산 + JSON 내보내기까지 포함.")

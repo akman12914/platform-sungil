@@ -1,6 +1,6 @@
 # wall_panel_final.py
 # -*- coding: utf-8 -*-
-# 벽판 계산 프로그램 (통합) - New Layout Engine + 공통 스타일 + 세션 관리
+# 벽판 계산 프로그램 (통합) - wall_panel_revised.py + 공통 스타일 + 세션 관리
 
 from __future__ import annotations
 import math
@@ -499,9 +499,17 @@ def compute_cost_for_bathroom(
     bath_width_mm: int,
     bath_length_mm: int,
     *,
+    tile_set_price: float,
+    tile_unit_price: float,
     total_labor_cost_per_day: float = TOTAL_LABOR_COST_PER_DAY,
+    production_overhead_rate: float = 0.20,
+    sales_admin_rate: float = 0.20,
 ) -> Dict[str, float]:
-    """벽판넬 치수/수량 + 각수 + 욕실형태 + 욕실규격으로 생산원가계(소계) 계산."""
+    """
+    판넬 1장당 기준으로 AD_panel을 만들고,
+    마지막에 × 판넬수량 → 욕실 1세트 생산원가(AD_set)를 계산하는 버전.
+    P_set, S_set, V_set, Y, 출고/렉입고 모두 '판넬당'으로 해석.
+    """
     if frame_grade not in FRAME_UNIT_PRICE:
         raise ValueError(f"지원하지 않는 각수(frame_grade): {frame_grade}")
 
@@ -509,46 +517,120 @@ def compute_cost_for_bathroom(
     if total_panels <= 0:
         raise ValueError("총 판넬 수량(total_panels)이 0입니다.")
 
-    total_area_m2 = sum((p.width_mm / 1000.0) * (p.height_mm / 1000.0) * p.qty for p in panels)
+    # ── ① 면적 / 둘레 계열 ─────────────────────────────
+    total_area_m2 = sum(
+        (p.width_mm / 1000.0) * (p.height_mm / 1000.0) * p.qty
+        for p in panels
+    )
     avg_panel_area_m2 = total_area_m2 / total_panels
 
-    total_perimeter_m = sum(2.0 * ((p.width_mm / 1000.0) + (p.height_mm / 1000.0)) * p.qty for p in panels)
+    # 프레임 사용량: 판넬 1장당 둘레(손실 2% 포함)
+    total_perimeter_m = sum(
+        2.0 * ((p.width_mm / 1000.0) + (p.height_mm / 1000.0)) * p.qty
+        for p in panels
+    )
     total_perimeter_with_loss_m = total_perimeter_m * 1.02
-    frame_usage_m = total_perimeter_with_loss_m / total_panels
+    frame_usage_m = total_perimeter_with_loss_m / total_panels  # (m / panel)
 
     frame_unit_price = FRAME_UNIT_PRICE[frame_grade]
-    frame_amount = frame_usage_m * frame_unit_price
+    frame_amount = frame_usage_m * frame_unit_price            # 프레임비(판넬 1장당)
 
     pu_unit_price = PU_UNIT_PRICE[frame_grade]
-    pu_amount = avg_panel_area_m2 * pu_unit_price
+    pu_amount = avg_panel_area_m2 * pu_unit_price              # P/U비(판넬 1장당)
 
-    accessories_amount = CLIP_UNIT_PRICE
+    accessories_amount = CLIP_UNIT_PRICE                       # 조립클립(판넬 1장당)
+
+    # ► 원재료 소계(판넬 1장당) = M_panel
     material_total = frame_amount + pu_amount + accessories_amount
 
-    daily_prod_qty = get_daily_production_qty(avg_panel_area_m2)
-    sets_per_day = daily_prod_qty / total_panels
-    labor_per_set = total_labor_cost_per_day / sets_per_day
+    # ── ② 생산인건비 P_panel ───────────────────────────
+    #    타일 일일 생산량을 판넬 수량으로 나눈 "판넬당 타일 수량"으로 인건비를 나눔
+    daily_prod_qty = get_daily_production_qty(avg_panel_area_m2)   # 타일 일일 생산량 (개/일)
+    tiles_per_panel = daily_prod_qty / total_panels                # 판넬당 타일 수량 (개/판넬)
+    labor_per_panel = total_labor_cost_per_day / tiles_per_panel   # P_panel (판넬당 생산인건비)
+    sets_per_day = daily_prod_qty / total_panels                   # 세트/일 (참고용)
+    labor_per_set = labor_per_panel * total_panels                 # 세트당 생산인건비 (참고용)
 
-    equip_dep = EQUIP_DEPRECIATION_PER_SET
-    mfg_overhead = MANUFACTURING_OVERHEAD_PER_SET
+    # ── ③ 설비감가비 S_panel / 제조경비 V_panel / 출고·렉입고 AB_panel ──
+    #    ※ 값은 그대로 사용하되, "판넬당" 금액으로 해석
+    equip_dep_per_panel = EQUIP_DEPRECIATION_PER_SET        # S_panel
+    mfg_overhead_per_panel = MANUFACTURING_OVERHEAD_PER_SET # V_panel
+    shipping_rack_per_panel = SHIPPING_RACK_PER_SET         # AB_panel
 
     spec_code = make_spec_code(bath_width_mm, bath_length_mm)
-    tile_W = get_tile_mgmt_quantity(spec_code, bath_type)
-    tile_mgmt_cost = tile_W * TILE_MGMT_UNIT_PRICE
-    shipping_rack_cost = SHIPPING_RACK_PER_SET
 
-    production_cost = (material_total + labor_per_set + equip_dep + mfg_overhead + tile_mgmt_cost + shipping_rack_cost)
+    # ── ④ 타일관리비 Y_panel ───────────────────────────
+    if tile_set_price > 0 and tile_unit_price > 0:
+        tile_total_tiles = float(tile_set_price) / float(tile_unit_price)
+    else:
+        tile_total_tiles = 0.0
+
+    tile_per_panel = tile_total_tiles / float(total_panels) if total_panels > 0 else 0.0
+    tile_mgmt_per_panel = tile_per_panel * TILE_MGMT_UNIT_PRICE    # Y_panel
+    tile_mgmt_cost = tile_mgmt_per_panel * total_panels            # 세트 기준 (참고용)
+
+    # ── ⑤ 판넬 1장당 생산원가계 AD_panel ─────────────────
+    ad_per_panel = (
+        material_total         # M_panel
+        + labor_per_panel      # P_panel
+        + equip_dep_per_panel  # S_panel
+        + mfg_overhead_per_panel  # V_panel
+        + tile_mgmt_per_panel  # Y_panel
+        + shipping_rack_per_panel  # AB_panel
+    )
+
+    # 욕실 1세트당 생산원가 (AD_set)
+    production_cost = ad_per_panel * total_panels
+
+    # ── ⑥ 생산관리비 / 영업관리비 (세트 기준) ─────────────
+    #    엑셀 로직: AD_set / (1 - rₚ) / (1 - rₛ)
+    cost_with_prod_ovhd = production_cost / (1.0 - production_overhead_rate)
+    production_overhead = cost_with_prod_ovhd - production_cost
+
+    final_cost = cost_with_prod_ovhd / (1.0 - sales_admin_rate)
+    sales_admin_overhead = final_cost - cost_with_prod_ovhd
 
     return {
-        "spec_code": spec_code, "bath_type": bath_type, "frame_grade": frame_grade,
-        "total_panels": float(total_panels), "total_area_m2": total_area_m2, "avg_panel_area_m2": avg_panel_area_m2,
-        "frame_usage_m": frame_usage_m, "frame_unit_price": float(frame_unit_price), "frame_amount": frame_amount,
-        "pu_unit_price": float(pu_unit_price), "pu_amount": pu_amount,
-        "accessories_amount": float(accessories_amount), "material_total": material_total,
-        "daily_production_qty": float(daily_prod_qty), "sets_per_day": sets_per_day, "labor_per_set": labor_per_set,
-        "equip_dep": float(equip_dep), "mfg_overhead": float(mfg_overhead),
-        "tile_W": tile_W, "tile_mgmt_cost": tile_mgmt_cost, "shipping_rack_cost": float(shipping_rack_cost),
-        "소계": production_cost,
+        "spec_code": spec_code,
+        "bath_type": bath_type,
+        "frame_grade": frame_grade,
+
+        "total_panels": float(total_panels),
+        "total_area_m2": total_area_m2,
+        "avg_panel_area_m2": avg_panel_area_m2,
+
+        "frame_usage_m": frame_usage_m,
+        "frame_unit_price": float(frame_unit_price),
+        "frame_amount": frame_amount,                 # 프레임비(판넬당)
+
+        "pu_unit_price": float(pu_unit_price),
+        "pu_amount": pu_amount,                       # P/U비(판넬당)
+
+        "accessories_amount": float(accessories_amount),  # 조립클립(판넬당)
+        "material_total": material_total,             # ★ 판넬 1장당 원재료 소계
+
+        "daily_production_qty": float(daily_prod_qty),
+        "sets_per_day": sets_per_day,
+        "labor_per_panel": labor_per_panel,           # ★ P_panel
+        "labor_per_set": labor_per_set,               # 참고용
+
+        "equip_dep_per_panel": float(equip_dep_per_panel),     # ★ S_panel
+        "mfg_overhead_per_panel": float(mfg_overhead_per_panel),  # ★ V_panel
+
+        "tile_total_tiles": tile_total_tiles,
+        "tile_per_panel": tile_per_panel,
+        "tile_mgmt_per_panel": tile_mgmt_per_panel,  # ★ Y_panel
+        "tile_mgmt_cost": tile_mgmt_cost,            # 세트 기준
+
+        "shipping_rack_per_panel": float(shipping_rack_per_panel),  # ★ AB_panel
+        "shipping_rack_cost": shipping_rack_per_panel * total_panels,  # 세트 기준
+
+        "ad_per_panel": ad_per_panel,                # ★ AD_panel
+        "production_cost": production_cost,          # AD_set
+        "production_overhead": production_overhead,
+        "cost_with_production_overhead": cost_with_prod_ovhd,
+        "sales_admin_overhead": sales_admin_overhead,
+        "final_cost": final_cost,
     }
 
 @dataclass
@@ -858,7 +940,7 @@ def draw_corner_preview(
     W: dict,
     has_split: bool,
     canvas_w: int = 760,
-    margin: int = 60,
+    margin: int = 20,
 ) -> Image.Image:
     """
     코너형 평면도. 라벨: W1~W6
@@ -874,37 +956,21 @@ def draw_corner_preview(
     CANVAS_W = int(canvas_w)
     MARGIN   = int(margin)
 
-    # 폰트 설정 (한글 지원)
-    try:
-        font = ImageFont.truetype("NanumGothic.ttf", 18)
-    except Exception:
-        try:
-            font = ImageFont.truetype("DejaVuSans.ttf", 18)
-        except Exception:
-            font = ImageFont.load_default()
-
-    # 라벨 높이 계산
-    try:
-        bbox = font.getbbox("W1")
-        label_h = bbox[3] - bbox[1]
-    except Exception:
-        try:
-            label_h = font.getsize("W1")[1]
-        except Exception:
-            label_h = 16
-    LABEL_MARGIN = 12
+    # 왼쪽에 라벨 공간 확보용 오프셋
+    EXTRA_X = 96
 
     # 가로길이 W1을 기준으로 스케일 결정 (세로는 비율 유지)
     sx = (CANVAS_W - 2 * MARGIN) / max(1.0, float(W1))
     sy = sx
-    rect_h_px = W2 * sy
-    CANVAS_H = int(rect_h_px + 2 * MARGIN + label_h)
+    CANVAS_H = int(W2 * sy + 2 * MARGIN)
 
-    img = Image.new("RGB", (CANVAS_W, CANVAS_H), "white")
+    # 실제 이미지 폭은 오른쪽 여유(EXTRA_X)를 더 줌
+    IMG_W = CANVAS_W + EXTRA_X
+    img = Image.new("RGB", (IMG_W, CANVAS_H), "white")
     drw = ImageDraw.Draw(img)
 
     # 좌표 변환 (0,0 이 욕실 왼쪽 위 모서리라고 가정)
-    x0 = MARGIN
+    x0 = MARGIN + EXTRA_X
     y0 = MARGIN
 
     def X(mm: float) -> int:
@@ -912,19 +978,6 @@ def draw_corner_preview(
 
     def Y(mm: float) -> int:
         return int(round(y0 + mm * sy))
-
-    # 가운데 정렬 텍스트 유틸
-    def draw_centered(text: str, cx: float, cy: float):
-        try:
-            bbox = font.getbbox(text)
-            tw = bbox[2] - bbox[0]
-            th = bbox[3] - bbox[1]
-        except Exception:
-            try:
-                tw, th = font.getsize(text)
-            except Exception:
-                tw, th = 20, 16
-        drw.text((cx - tw / 2, cy - th / 2), text, font=font, fill="black")
 
     # 1) 외곽(전체 직사각형: 0~W1, 0~W2)
     drw.rectangle([X(0), Y(0), X(W1), Y(W2)], outline="black", width=3)
@@ -957,28 +1010,34 @@ def draw_corner_preview(
         width=1,
     )
 
-    # 샤워부 라벨 (중앙 정렬)
+    # 샤워부 라벨 (대략 중앙)
     cx = (shower_x0 + shower_x1) / 2.0
     cy = (shower_y0 + shower_y1) / 2.0
-    draw_centered("샤워부", X(cx), Y(cy))
+    drw.text(
+        (X(cx) - 18, Y(cy) - 7),
+        "샤워부",
+        fill="black",
+    )
 
     # 4) 세면/샤워 경계선 (W3 위치)
     if has_split:
         drw.line([X(W3), Y(0), X(W3), Y(W2)], fill="blue", width=3)
 
-    # 5) 라벨 W1~W6 위치 (중앙정렬 + 충분한 여백)
+    # 5) 라벨 W1~W6 위치
+    off = 14
+
     # W1: 바닥(가로 전체)
-    draw_centered("W1", X(W1 / 2.0), Y(W2) + LABEL_MARGIN + label_h / 2)
+    drw.text((X(W1 / 2.0),           Y(W2) + off), "W1", fill="black")
     # W2: 왼쪽 세로 벽 전체
-    draw_centered("W2", X(0) - LABEL_MARGIN - label_h / 2, Y(W2 / 2.0))
+    drw.text((X(0) - off,            Y(W2 / 2.0)), "W2", fill="black")
     # W3: 상단 왼쪽(세면부 길이)
-    draw_centered("W3", X(W3 / 2.0), Y(0) - LABEL_MARGIN - label_h / 2)
-    # W4: 오목부 세로폭 (오목부 왼쪽 라인 중간) - 선에서 충분히 떨어뜨림
-    draw_centered("W4", X(notch_x0) - LABEL_MARGIN - label_h / 2, Y(notch_y1 / 2.0))
+    drw.text((X(W3 / 2.0),           Y(0) - off),  "W3", fill="black")
+    # W4: 오목부 세로폭 (오목부 왼쪽 라인 중간)
+    drw.text((X(notch_x0) - off,     Y(notch_y1 / 2.0)), "W4", fill="black")
     # W5: 오목부/샤워 가로폭 (오목부/샤워 경계 아래)
-    draw_centered("W5", X(W1 - W5 / 2.0), Y(notch_y1) + LABEL_MARGIN + label_h / 2)
-    # W6: 우측 세로 벽 (샤워부 중간)
-    draw_centered("W6", X(W1) + LABEL_MARGIN + label_h / 2, Y(W4 + W6 / 2.0))
+    drw.text((X(W1 - W5 / 2.0),      Y(notch_y1) + off), "W5", fill="black")
+    # W6: 우측 세로 벽 중 샤워부 쪽이 강조되도록 약간 아래쪽
+    drw.text((X(W1) + off,           Y(W2 / 2.0) + 30),  "W6", fill="black")
 
     return img
 
@@ -1099,7 +1158,7 @@ def panels_for_faces_new_engine(faces: List[FaceSpec], TH: int, TW: int):
             errs.append({
                 "벽": f.wall_label, "벽면": f.face_label,
                 "face_w": int(f.width_mm), "face_h": int(f.height_mm),
-                "타일": f"{TH}×{TW}", "error": "INVALID_FACE_SIZE", "분할사유": getattr(f, "note", "")
+                "타일": f"{TH} x {TW}", "error": "INVALID_FACE_SIZE", "분할사유": getattr(f, "note", "")
             })
             continue
 
@@ -1110,7 +1169,7 @@ def panels_for_faces_new_engine(faces: List[FaceSpec], TH: int, TW: int):
                 rows.append({
                     "벽": f.wall_label,
                     "벽면": f.face_label,
-                    "타일": f"{TH}×{TW}",
+                    "타일": f"{TH} x {TW}",
                     "가로분해": horiz,
                     "세로규칙": p.get("row_note","") or "",
                     "열": p["col"], "행": p["row"],
@@ -1122,7 +1181,7 @@ def panels_for_faces_new_engine(faces: List[FaceSpec], TH: int, TW: int):
             errs.append({
                 "벽": f.wall_label, "벽면": f.face_label,
                 "face_w": int(f.width_mm), "face_h": int(f.height_mm),
-                "타일": f"{TH}×{TW}", "error": str(ex), "분할사유": getattr(f, "note", "")
+                "타일": f"{TH} x {TW}", "error": str(ex), "분할사유": getattr(f, "note", "")
             })
 
     return rows, errs
@@ -1130,16 +1189,35 @@ def panels_for_faces_new_engine(faces: List[FaceSpec], TH: int, TW: int):
 # =========================================================
 # 5) UI
 # =========================================================
-st.title("벽판 계산 프로그램 (통합)")
+st.title("벽판 규격/개수 산출")
 
-# 바닥판 완료 확인
+# =========================================
+# 바닥판 완료 확인 및 결과값 가져오기
+# =========================================
 floor_done = st.session_state.get(FLOOR_DONE_KEY, False)
 if not floor_done:
-    st.warning("⚠️ 벽판 계산을 진행하려면 먼저 **바닥판 계산**을 완료해야 합니다.")
-    st.info("""
-    좌측 사이드바에서 **바닥판 계산** 페이지로 이동하여 계산을 먼저 진행하세요.
-    """)
+    st.warning("벽판 계산을 진행하려면 먼저 **바닥판 계산**을 완료해야 합니다.")
+    st.info("좌측 사이드바에서 **바닥판 계산** 페이지로 이동하여 계산을 먼저 진행해 주세요.")
     st.stop()
+
+# 바닥판에서 넘어온 값 가져오기
+floor_result = st.session_state.get(FLOOR_RESULT_KEY, {})
+floor_inputs = floor_result.get("inputs", {})
+floor_shape = floor_inputs.get("shape", "사각형")  # 욕실형태
+floor_W = floor_inputs.get("W", 1600)  # 욕실폭 (사각형: 세로, 코너형: v2=v4+v6)
+floor_L = floor_inputs.get("L", 2000)  # 욕실길이 (사각형: 가로, 코너형: v1=v3+v5)
+# 코너형 매핑 (바닥판 floor_panel_final.py 기준):
+#   sw = W (욕실폭 = v2 = v4+v6) → 세면부 폭으로 저장되지만 실제로는 욕실 전체 폭
+#   sl = v3 (세면부 길이) → W3
+#   shw = v6 (샤워부 폭) → W6
+#   shl = v5 (샤워부 길이) → W5
+floor_sw = floor_inputs.get("sw", 1500)   # 코너형: 욕실폭 W (= v2 = v4+v6)
+floor_sl = floor_inputs.get("sl", 1300)   # 코너형: v3 (세면부 길이) → W3
+floor_shw = floor_inputs.get("shw", 900)  # 코너형: v6 (샤워부 폭) → W6
+floor_shl = floor_inputs.get("shl", 900)  # 코너형: v5 (샤워부 길이) → W5
+floor_usage = floor_inputs.get("usage", "PVE")  # 바닥판 유형
+floor_boundary_type = floor_inputs.get("boundary", None)  # 세면/샤워 구분 타입 ("구분" 또는 "구분없음")
+floor_boundary = floor_sl if floor_boundary_type == "구분" else None  # 경계 위치는 sl 값 사용
 
 # 세션 상태 초기화
 if "wall_cost_cfg" not in st.session_state:
@@ -1147,41 +1225,68 @@ if "wall_cost_cfg" not in st.session_state:
 if "wall_cost_msg" not in st.session_state:
     st.session_state["wall_cost_msg"] = "기본 상수(코드 내 정의)를 사용 중입니다."
 
-# 바닥판에서 업로드한 엑셀 파일 가져오기
-excel_file = st.session_state.get(SHARED_EXCEL_KEY)
-excel_filename = st.session_state.get(SHARED_EXCEL_NAME_KEY, "알 수 없음")
-
-# 엑셀 파일이 있으면 벽판 원가 파라미터 읽기
-if excel_file is not None:
-    excel_file.seek(0)  # 파일 포인터를 처음으로 리셋
-    file_bytes = excel_file.read()
-    try:
-        cfg, df_wall = parse_wall_cost_excel(file_bytes)
-        apply_wall_cost_config(cfg)
-        st.session_state["wall_cost_cfg"] = cfg
-        st.session_state["wall_cost_msg"] = "엑셀 '벽판' 시트에서 원가 파라미터를 읽어 적용했습니다."
-    except Exception as ex:
-        st.session_state["wall_cost_msg"] = f"벽판 sheet 파싱 오류: {ex}"
-
-# 카탈로그 확인 UI
-with st.expander("📋 업로드된 엑셀 정보 확인", expanded=False):
-    st.write(f"**파일명**: {excel_filename}")
-    st.caption(st.session_state["wall_cost_msg"])
-
 with st.sidebar:
     st.header("기본 입력")
 
-    # 프레임 각수 선택 (15각 / 16각 / 19각)
+    # 바닥판에서 업로드한 엑셀 파일 가져오기
+    excel_file = st.session_state.get(SHARED_EXCEL_KEY)
+    excel_filename = st.session_state.get(SHARED_EXCEL_NAME_KEY, "알 수 없음")
+
+    if excel_file is not None:
+        st.info(f"공유 엑셀 파일: **{excel_filename}**")
+        try:
+            excel_file.seek(0)
+            file_bytes = excel_file.read()
+            cfg, df_wall = parse_wall_cost_excel(file_bytes)
+            apply_wall_cost_config(cfg)
+            st.session_state["wall_cost_cfg"] = cfg
+            st.session_state["wall_cost_msg"] = "엑셀 '벽판' 시트에서 원가 파라미터를 읽어 적용했습니다."
+        except Exception as ex:
+            st.session_state["wall_cost_msg"] = f"벽판 sheet 파싱 오류: {ex}"
+    else:
+        st.warning("바닥판에서 업로드한 엑셀 파일이 없습니다.")
+
+    st.caption(st.session_state["wall_cost_msg"])
+
+    # 2. 프레임 각수 선택 (15각 / 16각 / 19각)
     frame_label = st.radio("프레임 각수 선택", ["15각", "16각", "19각"], horizontal=True)
     frame_grade = int(frame_label.replace("각", ""))
 
-    # 기존 입력들 (욕실형태, 높이, 바닥판 유형, 타일규격 등)
-    shape = st.radio("욕실형태", ["사각형", "코너형"], horizontal=True)
-    split_kind = st.radio("세면/샤워 구분", ["구분 없음", "구분 있음"], horizontal=True)
+    # 3. 기존 입력들 (욕실형태, 높이, 바닥판 유형, 타일규격 등)
+    # 욕실형태는 바닥판에서 가져온 값으로 고정
+    shape = floor_shape
+    st.text_input("욕실형태 (바닥판 기준)", value=shape, disabled=True)
+
+    # 세면/샤워 구분: 바닥판에서 boundary 값이 있으면 "구분 있음"
+    split_kind = "구분 있음" if floor_boundary is not None else "구분 없음"
+    st.text_input("세면/샤워 구분 (바닥판 기준)", value=split_kind, disabled=True)
+
     H = st.number_input("벽 높이 H (mm)", min_value=300, value=2200, step=50)
-    floor_type = st.radio("바닥판 유형", ["PVE", "그외(GRP/FRP)"], horizontal=True)
+
+    # 바닥판 유형: 바닥판에서 가져온 값으로 고정
+    floor_type = "PVE" if floor_usage == "PVE" else "그외(GRP/FRP)"
+    st.text_input("바닥판 유형 (바닥판 기준)", value=floor_type, disabled=True)
+
     tile = st.selectbox("벽타일 규격", ["300×600", "250×400"])
     H_eff = effective_height(H, floor_type)
+
+    # ★ 타일 가격/관리비 계산용 입력
+    st.divider()
+    st.subheader("타일 가격 정보")
+    tile_set_price = st.number_input(
+        "타일 set 가격 (원)",
+        min_value=0.0,
+        value=0.0,
+        step=10_000.0,
+        help="해당 욕실 1세트에 사용되는 타일 set의 총 가격"
+    )
+    tile_unit_price = st.number_input(
+        "타일 1장 단가 (원)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="타일 1장당 단가"
+    )
 
     st.divider()
     st.subheader("문(도어) 설정")
@@ -1225,15 +1330,20 @@ preview_img: Optional[Image.Image] = None
 
 if shape == "사각형":
     st.subheader("사각형 입력")
+    # 바닥판에서 가져온 값으로 고정
+    BL = int(floor_L)  # 욕실 길이
+    BW = int(floor_W)  # 욕실 폭
     colA, colB = st.columns(2)
     with colA:
-        BL = st.number_input("욕실 길이 BL (mm)", min_value=500, value=2000, step=50)
+        st.text_input("욕실 길이 BL (mm) - 바닥판 기준", value=str(BL), disabled=True)
     with colB:
-        BW = st.number_input("욕실 폭 BW (mm)", min_value=500, value=1600, step=50)
+        st.text_input("욕실 폭 BW (mm) - 바닥판 기준", value=str(BW), disabled=True)
 
     X = None
     if split_kind == "구분 있음":
-        X = st.slider("세면/샤워 경계 위치 X (mm)", min_value=100, max_value=int(BL), step=50, value=min(800, int(BL)))
+        # 바닥판에서 가져온 경계 위치 고정
+        X = int(floor_boundary) if floor_boundary is not None else 800
+        st.text_input("세면/샤워 경계 위치 X (mm) - 바닥판 기준", value=str(X), disabled=True)
 
     door_W = rect_wall_width_of(int(door_wall), int(BW), int(BL))
 
@@ -1322,7 +1432,7 @@ if shape == "사각형":
                 side_rows = compute_jendai_side_panels("사각형", j_enabled, j_has_step, int(j_depth), int(j_h))
                 TH, TW = parse_tile(tile)
                 for r in side_rows:
-                    r["타일"] = f"{TH}×{TW}"
+                    r["타일"] = f"{TH} x {TW}"
                 rows.extend(side_rows)
 
             if rows:
@@ -1375,6 +1485,8 @@ if shape == "사각형":
                     bath_type=shape,  # "사각형"
                     bath_width_mm=bath_width_mm,
                     bath_length_mm=bath_length_mm,
+                    tile_set_price=float(tile_set_price),
+                    tile_unit_price=float(tile_unit_price),
                     total_labor_cost_per_day=float(total_labor),
                 )
 
@@ -1386,82 +1498,91 @@ if shape == "사각형":
                     f"- 총 벽체 면적: **{cost_res['total_area_m2']:.3f} ㎡** "
                     f"(판넬 1장 평균 {cost_res['avg_panel_area_m2']:.3f} ㎡)"
                 )
+
                 st.write(
-                    f"- 프레임 사용량: **{cost_res['frame_usage_m']:.3f} m** × "
+                    f"- 프레임 사용량(판넬 1장당): **{cost_res['frame_usage_m']:.3f} m** × "
                     f"{int(cost_res['frame_unit_price']):,}원/m = {cost_res['frame_amount']:,.0f} 원"
                 )
                 st.write(
-                    f"- P/U: 평균면적 {cost_res['avg_panel_area_m2']:.3f} ㎡ × "
+                    f"- P/U(판넬 1장당): 평균면적 {cost_res['avg_panel_area_m2']:.3f} ㎡ × "
                     f"{int(cost_res['pu_unit_price']):,}원/㎡ = {cost_res['pu_amount']:,.0f} 원"
                 )
-                st.write(f"- 조립클립: {int(cost_res['accessories_amount']):,} 원")
-                st.write(f"- 원재료 소계: **{cost_res['material_total']:,.0f} 원**")
+                st.write(f"- 조립클립(판넬 1장당): {int(cost_res['accessories_amount']):,} 원")
+                st.write(f"- **원재료 소계(판넬 1장당)**: **{cost_res['material_total']:,.0f} 원**")
 
                 st.write(
-                    f"- 생산인건비: **{cost_res['labor_per_set']:,.0f} 원** "
-                    f"(일일 생산량 {int(cost_res['daily_production_qty'])}장, "
-                    f"하루 세트수 {cost_res['sets_per_day']:.2f}세트)"
+                    f"- 생산인건비(판넬 1장당): **{cost_res['labor_per_panel']:,.0f} 원** "
+                    f"(타일 일일 생산량 {int(cost_res['daily_production_qty'])}개 / "
+                    f"판넬수량 {int(cost_res['total_panels'])}장 = "
+                    f"{cost_res['sets_per_day']:.2f}개/판넬)"
                 )
-                st.write(
-                    f"- 설비감가비: {int(cost_res['equip_dep']):,} 원, "
-                    f"제조경비: {int(cost_res['mfg_overhead']):,} 원"
-                )
-                st.write(
-                    f"- 타일관리비: {int(cost_res['tile_mgmt_cost']):,} 원 "
-                    f"(수량 W = {cost_res['tile_W']})"
-                )
-                st.write(f"- 출고 + 렉입고: {int(cost_res['shipping_rack_cost']):,} 원")
 
-                st.write(f"- **소계**: **{cost_res['소계']:,.0f} 원**")
+                st.write(
+                    f"- 설비감가비·제조경비(판넬 1장당): "
+                    f"{int(cost_res['equip_dep_per_panel']):,} 원 + "
+                    f"{int(cost_res['mfg_overhead_per_panel']):,} 원"
+                )
 
-                # 세션 상태에 결과 저장
+                st.write(
+                    f"- 타일관리비(판넬 1장당): {cost_res['tile_mgmt_per_panel']:,.0f} 원 "
+                    f"(타일 {cost_res['tile_per_panel']:.2f} 장 × "
+                    f"관리단가 {int(TILE_MGMT_UNIT_PRICE):,}원)"
+                )
+
+                st.write(
+                    f"- 출고 + 렉입고(판넬 1장당): {int(cost_res['shipping_rack_per_panel']):,} 원"
+                )
+
+                st.write(
+                    f"- **생산원가계(AD)**: "
+                    f"판넬 1장당 {cost_res['ad_per_panel']:,.0f} 원 × "
+                    f"{int(cost_res['total_panels'])} 장 = "
+                    f"**{cost_res['production_cost']:,.0f} 원**"
+                )
+
+                # =========================================
+                # 세션 상태 저장 및 JSON 내보내기
+                # =========================================
                 st.session_state[WALL_RESULT_KEY] = {
                     "section": "wall",
                     "inputs": {
                         "shape": shape,
-                        "H": H,
-                        "floor_type": floor_type,
-                        "tile": tile,
-                        "BL": BL,
-                        "BW": BW,
-                        "door_wall": door_wall,
-                        "door_s": door_s,
-                        "door_d": door_d,
-                        "j_enabled": j_enabled,
-                        "j_wall": j_wall,
-                        "j_h": j_h,
-                        "j_depth": j_depth,
-                        "j_has_step": j_has_step,
+                        "bath_width_mm": bath_width_mm,
+                        "bath_length_mm": bath_length_mm,
                         "frame_grade": frame_grade,
+                        "tile": tile,
+                        "H": H,
+                        "H_eff": H_eff,
+                        "floor_type": floor_type,
+                        "tile_set_price": tile_set_price,
+                        "tile_unit_price": tile_unit_price,
                     },
                     "result": cost_res,
                     "panels": df.to_dict("records"),
                 }
                 st.session_state[WALL_DONE_KEY] = True
 
-                # JSON 파일로 저장
+                # JSON 파일 자동 저장
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 json_filename = f"wall_{timestamp}.json"
                 json_path = os.path.join(EXPORT_DIR, json_filename)
                 _save_json(json_path, st.session_state[WALL_RESULT_KEY])
 
+                # UI 피드백
+                st.success("계산 완료")
+                st.info("""
+**다음 단계**: 천장판 계산을 진행하세요.
+좌측 사이드바에서 **천장판 계산** 페이지로 이동하여 계산을 진행할 수 있습니다.
+""")
+
                 # JSON 다운로드
                 json_str = json.dumps(cost_res, ensure_ascii=False, indent=2)
                 st.download_button(
-                    "📥 원가 결과 JSON 다운로드",
+                    "원가 결과 JSON 다운로드",
                     data=json_str,
                     file_name="wall_panel_cost.json",
                     mime="application/json",
                 )
-
-                st.success("✅ 계산 완료")
-
-                # 다음 단계 안내
-                st.info("""
-                **다음 단계**: 천장판 계산을 진행하세요.
-
-                좌측 사이드바에서 **천장판 계산** 페이지로 이동하여 계산을 진행할 수 있습니다.
-                """)
 
             if errs:
                 st.warning("규칙 적용 실패/제약 위반 벽면")
@@ -1470,19 +1591,26 @@ if shape == "사각형":
 
 else:
     # 코너형
-    st.subheader("코너형 입력 (W1~W6)")
+    st.subheader("코너형 입력 (W1~W6) - 바닥판 기준")
+    # 바닥판에서 가져온 값으로 고정
+    # 바닥판 매핑: sl=v3(세면부길이→W3), shl=v5(샤워부길이→W5), shw=v6(샤워부폭→W6), sw=W(욕실폭=v4+v6)
+    W3 = int(floor_sl)      # v3 (세면부 길이)
+    W5 = int(floor_shl)     # v5 (샤워부 길이)
+    W6 = int(floor_shw)     # v6 (샤워부 폭)
+    W4 = int(floor_sw) - W6 # v4 = W - v6 (오목 세로 = 욕실폭 - 샤워부폭)
+    W1 = W3 + W5            # v1 = v3 + v5 (욕실 길이)
+    W2 = W4 + W6            # v2 = v4 + v6 (욕실 폭)
+
     cA, cB = st.columns(2)
     with cA:
         st.markdown("**가로(바닥) 방향**")
-        W3 = st.number_input("W3 (mm)", min_value=100, value=800, step=50, key="corner_w3")
-        W5 = st.number_input("W5 (mm)", min_value=100, value=1200, step=50, key="corner_w5")
-        W1 = W3 + W5
+        st.text_input("W3 (mm)", value=str(W3), disabled=True, key="corner_w3")
+        st.text_input("W5 (mm)", value=str(W5), disabled=True, key="corner_w5")
         st.text_input("W1 = W3 + W5", value=str(W1), disabled=True)
     with cB:
         st.markdown("**세로(좌우) 방향**")
-        W4 = st.number_input("W4 (mm)", min_value=100, value=600, step=50, key="corner_w4")
-        W6 = st.number_input("W6 (mm)", min_value=100, value=1000, step=50, key="corner_w6")
-        W2 = W4 + W6
+        st.text_input("W4 (mm)", value=str(W4), disabled=True, key="corner_w4")
+        st.text_input("W6 (mm)", value=str(W6), disabled=True, key="corner_w6")
         st.text_input("W2 = W4 + W6", value=str(W2), disabled=True)
 
     W = {1:int(W1), 2:int(W2), 3:int(W3), 4:int(W4), 5:int(W5), 6:int(W6)}
@@ -1566,7 +1694,7 @@ else:
                 side_rows = compute_jendai_side_panels("코너형", j_enabled, j_has_step, int(j_depth), int(j_h))
                 TH, TW = parse_tile(tile)
                 for r in side_rows:
-                    r["타일"] = f"{TH}×{TW}"
+                    r["타일"] = f"{TH} x {TW}"
                 rows.extend(side_rows)
 
             if rows:
@@ -1619,6 +1747,8 @@ else:
                     bath_type=shape,  # "코너형"
                     bath_width_mm=bath_width_mm,
                     bath_length_mm=bath_length_mm,
+                    tile_set_price=float(tile_set_price),
+                    tile_unit_price=float(tile_unit_price),
                     total_labor_cost_per_day=float(total_labor),
                 )
 
@@ -1630,84 +1760,95 @@ else:
                     f"- 총 벽체 면적: **{cost_res['total_area_m2']:.3f} ㎡** "
                     f"(판넬 1장 평균 {cost_res['avg_panel_area_m2']:.3f} ㎡)"
                 )
+
                 st.write(
-                    f"- 프레임 사용량: **{cost_res['frame_usage_m']:.3f} m** × "
+                    f"- 프레임 사용량(판넬 1장당): **{cost_res['frame_usage_m']:.3f} m** × "
                     f"{int(cost_res['frame_unit_price']):,}원/m = {cost_res['frame_amount']:,.0f} 원"
                 )
                 st.write(
-                    f"- P/U: 평균면적 {cost_res['avg_panel_area_m2']:.3f} ㎡ × "
+                    f"- P/U(판넬 1장당): 평균면적 {cost_res['avg_panel_area_m2']:.3f} ㎡ × "
                     f"{int(cost_res['pu_unit_price']):,}원/㎡ = {cost_res['pu_amount']:,.0f} 원"
                 )
-                st.write(f"- 조립클립: {int(cost_res['accessories_amount']):,} 원")
-                st.write(f"- 원재료 소계: **{cost_res['material_total']:,.0f} 원**")
+                st.write(f"- 조립클립(판넬 1장당): {int(cost_res['accessories_amount']):,} 원")
+                st.write(f"- **원재료 소계(판넬 1장당)**: **{cost_res['material_total']:,.0f} 원**")
 
                 st.write(
-                    f"- 생산인건비: **{cost_res['labor_per_set']:,.0f} 원** "
-                    f"(일일 생산량 {int(cost_res['daily_production_qty'])}장, "
-                    f"하루 세트수 {cost_res['sets_per_day']:.2f}세트)"
+                    f"- 생산인건비(판넬 1장당): **{cost_res['labor_per_panel']:,.0f} 원** "
+                    f"(타일 일일 생산량 {int(cost_res['daily_production_qty'])}개 / "
+                    f"판넬수량 {int(cost_res['total_panels'])}장 = "
+                    f"{cost_res['sets_per_day']:.2f}개/판넬)"
                 )
-                st.write(
-                    f"- 설비감가비: {int(cost_res['equip_dep']):,} 원, "
-                    f"제조경비: {int(cost_res['mfg_overhead']):,} 원"
-                )
-                st.write(
-                    f"- 타일관리비: {int(cost_res['tile_mgmt_cost']):,} 원 "
-                    f"(수량 W = {cost_res['tile_W']})"
-                )
-                st.write(f"- 출고 + 렉입고: {int(cost_res['shipping_rack_cost']):,} 원")
 
-                st.write(f"- **소계**: **{cost_res['소계']:,.0f} 원**")
+                st.write(
+                    f"- 설비감가비·제조경비(판넬 1장당): "
+                    f"{int(cost_res['equip_dep_per_panel']):,} 원 + "
+                    f"{int(cost_res['mfg_overhead_per_panel']):,} 원"
+                )
 
-                # 세션 상태에 결과 저장
+                st.write(
+                    f"- 타일관리비(판넬 1장당): {cost_res['tile_mgmt_per_panel']:,.0f} 원 "
+                    f"(타일 {cost_res['tile_per_panel']:.2f} 장 × "
+                    f"관리단가 {int(TILE_MGMT_UNIT_PRICE):,}원)"
+                )
+
+                st.write(
+                    f"- 출고 + 렉입고(판넬 1장당): {int(cost_res['shipping_rack_per_panel']):,} 원"
+                )
+
+                st.write(
+                    f"- **생산원가계(AD)**: "
+                    f"판넬 1장당 {cost_res['ad_per_panel']:,.0f} 원 × "
+                    f"{int(cost_res['total_panels'])} 장 = "
+                    f"**{cost_res['production_cost']:,.0f} 원**"
+                )
+
+                # =========================================
+                # 세션 상태 저장 및 JSON 내보내기
+                # =========================================
                 st.session_state[WALL_RESULT_KEY] = {
                     "section": "wall",
                     "inputs": {
                         "shape": shape,
-                        "H": H,
-                        "floor_type": floor_type,
-                        "tile": tile,
-                        "W1": W1, "W2": W2, "W3": W3, "W4": W4, "W5": W5, "W6": W6,
-                        "door_wall": door_wall,
-                        "door_s": door_s,
-                        "door_d": door_d,
-                        "j_enabled": j_enabled,
-                        "j_wall": j_wall,
-                        "j_h": j_h,
-                        "j_depth": j_depth,
-                        "j_has_step": j_has_step,
+                        "bath_width_mm": bath_width_mm,
+                        "bath_length_mm": bath_length_mm,
                         "frame_grade": frame_grade,
+                        "tile": tile,
+                        "H": H,
+                        "H_eff": H_eff,
+                        "floor_type": floor_type,
+                        "tile_set_price": tile_set_price,
+                        "tile_unit_price": tile_unit_price,
+                        "W": W,
                     },
                     "result": cost_res,
                     "panels": df.to_dict("records"),
                 }
                 st.session_state[WALL_DONE_KEY] = True
 
-                # JSON 파일로 저장
+                # JSON 파일 자동 저장
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 json_filename = f"wall_{timestamp}.json"
                 json_path = os.path.join(EXPORT_DIR, json_filename)
                 _save_json(json_path, st.session_state[WALL_RESULT_KEY])
 
+                # UI 피드백
+                st.success("계산 완료")
+                st.info("""
+**다음 단계**: 천장판 계산을 진행하세요.
+좌측 사이드바에서 **천장판 계산** 페이지로 이동하여 계산을 진행할 수 있습니다.
+""")
+
                 # JSON 다운로드
                 json_str = json.dumps(cost_res, ensure_ascii=False, indent=2)
                 st.download_button(
-                    "📥 원가 결과 JSON 다운로드",
+                    "원가 결과 JSON 다운로드",
                     data=json_str,
                     file_name="wall_panel_cost.json",
                     mime="application/json",
                 )
 
-                st.success("✅ 계산 완료")
-
-                # 다음 단계 안내
-                st.info("""
-                **다음 단계**: 천장판 계산을 진행하세요.
-
-                좌측 사이드바에서 **천장판 계산** 페이지로 이동하여 계산을 진행할 수 있습니다.
-                """)
-
             if errs:
                 st.warning("규칙 적용 실패/제약 위반 벽면")
                 st.dataframe(pd.DataFrame(errs).rename(columns={"face_w":"벽면폭","face_h":"벽면높이"}), use_container_width=True)
 
-st.caption("※ 새 엔진 적용 + 벽판 단가/소계 자동계산 + JSON 내보내기까지 포함.")
+st.caption("※ 새 엔진 적용 + 벽판 단가/소계/생산·영업관리비 자동계산 + JSON 내보내기까지 포함.")

@@ -34,16 +34,27 @@ auth.require_auth()
 # ----------------------------
 # 코드 분류 체계 로드
 # ----------------------------
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)  # 60초 후 캐시 만료
 def load_code_classification() -> Dict:
-    """코드분류(최종) 시트에서 대분류/중분류/규격 코드 체계 로드"""
+    """코드분류(최종) 시트에서 대분류/중분류/규격 코드 체계 로드
+
+    시트 구조 (header=None):
+    - 컬럼 0: 대분류명
+    - 컬럼 1: 대분류코드
+    - 컬럼 3: 중분류명
+    - 컬럼 4: 중분류코드
+    - 컬럼 6: 규격
+    - 컬럼 7: 규격코드
+    """
     try:
-        df = pd.read_excel(ERP_CODE_FILE, sheet_name="코드분류(최종)")
+        df = pd.read_excel(ERP_CODE_FILE, sheet_name="코드분류(최종)", header=None)
 
         classification = {
-            "대분류": {},  # 품목명 -> 코드
-            "중분류": {},  # (대분류코드, 품목명) -> 코드
-            "규격": {},    # (중분류코드, 규격명) -> 코드
+            "대분류": {},  # 대분류명 -> 대분류코드
+            "중분류": {},  # (대분류코드, 중분류명) -> 중분류코드
+            "규격": {},    # (중분류코드, 규격명) -> 규격코드
+            "중분류_검색": {},  # 중분류명 -> [(대분류코드, 중분류코드), ...]
+            "규격_검색": {},    # 규격명 -> [(중분류코드, 규격코드), ...]
         }
 
         current_대분류 = None
@@ -51,56 +62,218 @@ def load_code_classification() -> Dict:
         current_중분류 = None
         current_중분류코드 = None
 
-        for _, row in df.iterrows():
-            # 대분류 처리
-            대분류 = row.get("대분류")
-            대분류코드 = row.get("Unnamed: 1")
+        for idx, row in df.iterrows():
+            # 헤더 행 건너뛰기 (첫 2행)
+            if idx < 2:
+                continue
 
-            if pd.notna(대분류) and str(대분류).strip() != "품목":
+            # 대분류 처리 (컬럼 0, 1)
+            대분류 = row.iloc[0] if len(row) > 0 else None
+            대분류코드 = row.iloc[1] if len(row) > 1 else None
+
+            if pd.notna(대분류) and str(대분류).strip() not in ["품목", "대분류", ""]:
                 current_대분류 = str(대분류).strip()
                 if pd.notna(대분류코드):
                     current_대분류코드 = str(대분류코드).strip()
                     classification["대분류"][current_대분류] = current_대분류코드
 
-            # 중분류 처리
-            중분류 = row.get("중분류")
-            중분류코드 = row.get("Unnamed: 4")
+            # 중분류 처리 (컬럼 3, 4)
+            중분류 = row.iloc[3] if len(row) > 3 else None
+            중분류코드 = row.iloc[4] if len(row) > 4 else None
 
-            if pd.notna(중분류) and str(중분류).strip() not in ["품목", "성형부 코드"]:
+            if pd.notna(중분류) and str(중분류).strip() not in ["품목", "중분류", "성형부 코드", ""]:
                 current_중분류 = str(중분류).strip()
                 if pd.notna(중분류코드):
                     current_중분류코드 = str(중분류코드).strip()
                     key = (current_대분류코드, current_중분류)
                     classification["중분류"][key] = current_중분류코드
 
-            # 규격 처리
-            규격 = row.get("규격")
-            규격코드 = row.get("Unnamed: 7")
+                    # 중분류 검색용 인덱스
+                    if current_중분류 not in classification["중분류_검색"]:
+                        classification["중분류_검색"][current_중분류] = []
+                    classification["중분류_검색"][current_중분류].append(
+                        (current_대분류코드, current_중분류코드)
+                    )
 
-            if pd.notna(규격) and str(규격).strip() not in ["품목", ""]:
+            # 규격 처리 (컬럼 6, 7)
+            규격 = row.iloc[6] if len(row) > 6 else None
+            규격코드 = row.iloc[7] if len(row) > 7 else None
+
+            if pd.notna(규격) and str(규격).strip() not in ["품목", "규격", ""]:
                 규격명 = str(규격).strip()
                 if pd.notna(규격코드):
                     규격코드값 = str(규격코드).strip()
                     key = (current_중분류코드, 규격명)
                     classification["규격"][key] = 규격코드값
 
+                    # 규격 검색용 인덱스
+                    if 규격명 not in classification["규격_검색"]:
+                        classification["규격_검색"][규격명] = []
+                    classification["규격_검색"][규격명].append(
+                        (current_중분류코드, 규격코드값)
+                    )
+
         return classification
     except Exception as e:
         st.error(f"코드 분류 로드 실패: {e}")
-        return {"대분류": {}, "중분류": {}, "규격": {}}
+        return {"대분류": {}, "중분류": {}, "규격": {}, "중분류_검색": {}, "규격_검색": {}}
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)  # 60초 후 캐시 만료
 def load_existing_codes() -> pd.DataFrame:
-    """기존 ERP 코드 목록 로드 (251113 시트)"""
+    """기존 ERP 코드 목록 로드 (ERP매칭용 시트 - 최종 산출 양식과 동일)
+
+    ERP매칭용 시트 컬럼 (최종 산출 양식과 동일):
+    - 생성품목코드: ERP 코드 (예: GPFSB1419L)
+    - 생성품목명: 중분류 값 (= ERP 품목명)
+    - 대분류코드, 대분류
+    - 중분류코드, 중분류
+    - 규격코드, 규격
+    """
     try:
-        df = pd.read_excel(ERP_CODE_FILE, sheet_name="251113_바닥판,내부자재,부속품,천장판,벽체)")
-        # 컬럼명 정규화: "대분류 코드" -> "대분류코드"
-        df.columns = [col.strip().replace(' ', '') for col in df.columns]
+        # 우선 ERP매칭용 시트 시도
+        df = pd.read_excel(ERP_CODE_FILE, sheet_name="ERP매칭용")
         return df
+    except Exception:
+        # 폴백: 기존 시트 사용
+        try:
+            df = pd.read_excel(ERP_CODE_FILE, sheet_name="251113_바닥판,내부자재,부속품,천장판,벽체)")
+            df.columns = [col.strip().replace(' ', '') for col in df.columns]
+            # 기존 시트 컬럼을 ERP매칭용 형식에 맞게 변환
+            df = df.rename(columns={"품목코드생성": "생성품목코드"})
+            df["생성품목명"] = df["중분류"]
+            return df
+        except Exception as e:
+            st.error(f"기존 코드 로드 실패: {e}")
+            return pd.DataFrame()
+
+
+def refresh_erp_matching_sheet() -> bool:
+    """ERP매칭용 시트 갱신 - 251113 + 코드분류(최종) 병합"""
+    try:
+        from openpyxl import load_workbook
+
+        # 1. 251113 시트 데이터 로드
+        df_251113 = pd.read_excel(ERP_CODE_FILE, sheet_name="251113_바닥판,내부자재,부속품,천장판,벽체)")
+        df_251113.columns = [col.strip().replace(' ', '') for col in df_251113.columns]
+
+        # 생성품목코드 생성: 대분류코드 + 중분류코드 + 규격코드
+        def generate_item_code(row):
+            parts = []
+            if pd.notna(row.get("대분류코드")):
+                parts.append(str(row["대분류코드"]).strip())
+            if pd.notna(row.get("중분류코드")):
+                parts.append(str(row["중분류코드"]).strip())
+            if pd.notna(row.get("규격코드")):
+                parts.append(str(row["규격코드"]).strip())
+            return "".join(parts)
+
+        df_from_251113 = pd.DataFrame({
+            "생성품목코드": df_251113.apply(generate_item_code, axis=1),
+            "생성품목명": df_251113["중분류"],
+            "대분류코드": df_251113["대분류코드"],
+            "대분류": df_251113["대분류"],
+            "중분류코드": df_251113["중분류코드"],
+            "중분류": df_251113["중분류"],
+            "규격코드": df_251113["규격코드"],
+            "규격": df_251113["규격"],
+        })
+
+        # 2. 코드분류(최종) 시트 데이터 로드
+        df_class = pd.read_excel(ERP_CODE_FILE, sheet_name="코드분류(최종)", header=None)
+        rows = []
+        current_대분류 = None
+        current_대분류코드 = None
+        current_중분류 = None
+        current_중분류코드 = None
+
+        for idx, row in df_class.iterrows():
+            if idx < 2:
+                continue
+
+            대분류 = row.iloc[0] if len(row) > 0 else None
+            대분류코드 = row.iloc[1] if len(row) > 1 else None
+            if pd.notna(대분류) and str(대분류).strip() not in ["품목", "대분류", ""]:
+                current_대분류 = str(대분류).strip()
+                if pd.notna(대분류코드):
+                    current_대분류코드 = str(대분류코드).strip()
+
+            중분류 = row.iloc[3] if len(row) > 3 else None
+            중분류코드 = row.iloc[4] if len(row) > 4 else None
+            if pd.notna(중분류) and str(중분류).strip() not in ["품목", "중분류", "성형부 코드", ""]:
+                current_중분류 = str(중분류).strip()
+                if pd.notna(중분류코드):
+                    current_중분류코드 = str(중분류코드).strip()
+
+            규격 = row.iloc[6] if len(row) > 6 else None
+            규격코드 = row.iloc[7] if len(row) > 7 else None
+
+            if current_중분류코드 and pd.notna(규격) and str(규격).strip() not in ["품목", "규격", ""]:
+                규격명 = str(규격).strip()
+                규격코드값 = str(규격코드).strip() if pd.notna(규격코드) else ""
+                생성품목코드 = f"{current_대분류코드 or ''}{current_중분류코드 or ''}{규격코드값}"
+                rows.append({
+                    "생성품목코드": 생성품목코드,
+                    "생성품목명": current_중분류,
+                    "대분류코드": current_대분류코드,
+                    "대분류": current_대분류,
+                    "중분류코드": current_중분류코드,
+                    "중분류": current_중분류,
+                    "규격코드": 규격코드값,
+                    "규격": 규격명,
+                })
+            elif current_중분류코드 and (not pd.notna(규격) or str(규격).strip() in ["", "품목", "규격"]):
+                existing = [r for r in rows if r["중분류코드"] == current_중분류코드 and r["규격"] == ""]
+                if not existing and current_중분류:
+                    생성품목코드 = f"{current_대분류코드 or ''}{current_중분류코드 or ''}"
+                    rows.append({
+                        "생성품목코드": 생성품목코드,
+                        "생성품목명": current_중분류,
+                        "대분류코드": current_대분류코드,
+                        "대분류": current_대분류,
+                        "중분류코드": current_중분류코드,
+                        "중분류": current_중분류,
+                        "규격코드": "",
+                        "규격": "",
+                    })
+
+        df_classification = pd.DataFrame(rows)
+
+        # 3. 두 데이터 병합 (중복 제거)
+        df_combined = pd.concat([df_from_251113, df_classification], ignore_index=True)
+        df_new = df_combined.drop_duplicates(subset=["생성품목코드"], keep="first")
+        df_new = df_new.fillna("")
+        df_new = df_new[df_new["생성품목코드"] != ""]
+
+        # 4. 엑셀 파일에 새 시트 추가
+        wb = load_workbook(ERP_CODE_FILE)
+        if "ERP매칭용" in wb.sheetnames:
+            del wb["ERP매칭용"]
+
+        ws = wb.create_sheet("ERP매칭용")
+        headers = list(df_new.columns)
+        for col_idx, header in enumerate(headers, 1):
+            ws.cell(row=1, column=col_idx, value=header)
+
+        for row_idx, row in enumerate(df_new.itertuples(index=False), 2):
+            for col_idx, value in enumerate(row, 1):
+                ws.cell(row=row_idx, column=col_idx, value=value)
+
+        # 컬럼 너비 조정
+        column_widths = {"A": 20, "B": 30, "C": 12, "D": 18, "E": 12, "F": 25, "G": 12, "H": 20}
+        for col, width in column_widths.items():
+            ws.column_dimensions[col].width = width
+
+        wb.save(ERP_CODE_FILE)
+
+        # 캐시 클리어
+        load_existing_codes.clear()
+        load_code_classification.clear()
+
+        return True
     except Exception as e:
-        st.error(f"기존 코드 로드 실패: {e}")
-        return pd.DataFrame()
+        st.error(f"시트 갱신 실패: {e}")
+        return False
 
 
 def get_erp_output_columns() -> List[str]:
@@ -137,9 +310,235 @@ def extract_dimensions(spec: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def normalize_for_matching(text: str) -> str:
+    """매칭용 문자열 정규화 - 괄호 내용 통일, 오타 수정 등"""
+    if not text:
+        return ""
+    text = str(text).strip()
+
+    # 괄호 통일: （）→ (), ［］→ []
+    text = text.replace("（", "(").replace("）", ")")
+    text = text.replace("［", "[").replace("］", "]")
+
+    # 흔한 오타/변형 수정
+    typo_fixes = {
+        "내항균성": "내항균성",  # 정상
+        "내향균성": "내항균성",  # 오타 수정
+        "내황균성": "내항균성",  # 오타 수정
+        "내한균성": "내항균성",  # 오타 수정
+    }
+    for wrong, correct in typo_fixes.items():
+        text = text.replace(wrong, correct)
+
+    return text
+
+
 def calculate_similarity(s1: str, s2: str) -> float:
-    """두 문자열의 유사도 계산"""
-    return SequenceMatcher(None, normalize_spec(s1), normalize_spec(s2)).ratio()
+    """두 문자열의 유사도 계산 (정규화 후 비교)"""
+    # 기본 정규화
+    n1 = normalize_spec(s1)
+    n2 = normalize_spec(s2)
+
+    # 매칭용 추가 정규화
+    m1 = normalize_for_matching(s1)
+    m2 = normalize_for_matching(s2)
+
+    # 두 가지 방식 중 높은 유사도 선택
+    sim1 = SequenceMatcher(None, n1, n2).ratio()
+    sim2 = SequenceMatcher(None, m1, m2).ratio()
+
+    return max(sim1, sim2)
+
+
+def _clean_value(val) -> str:
+    """NaN이나 None을 빈 문자열로 변환"""
+    if pd.isna(val) or val is None:
+        return ""
+    return str(val).strip()
+
+
+def search_in_classification(
+    품목: str,
+    사양: str,
+    classification: Dict,
+    existing_codes: pd.DataFrame,
+) -> Optional[Dict]:
+    """코드분류(최종) 데이터에서 품목/사양 검색
+
+    품목명 또는 사양에서 핵심 키워드를 추출하여 중분류와 매칭합니다.
+    예: 품목='문세트', 사양='ABS 문짝' -> 사양에서 '문짝' 발견 -> 문짝(일반) 매칭
+    """
+    품목_clean = str(품목).strip()
+    사양_clean = str(사양).strip()
+    검색_텍스트 = f"{품목_clean} {사양_clean}"  # 품목+사양 합쳐서 검색
+
+    중분류_검색 = classification.get("중분류_검색", {})
+
+    # 0. 핵심 키워드 기반 매칭 (품목 또는 사양에서 검색)
+    핵심_키워드_매핑 = {
+        "문짝": ["문짝(일반)"],
+        "포켓도어": ["문짝(포켓도어)"],
+        "문틀": ["문틀(일반)"],
+        "실리콘": ["실리콘(내항균성)"],
+        "세면기": ["세면기"],
+        "양변기": ["양변기"],
+        "수전": ["수전"],
+        "거울": ["거울"],
+        "욕실장": ["욕실장"],
+        "환풍기": ["환풍기"],
+        "샤워기": ["샤워기"],
+    }
+
+    for 키워드, 대상_중분류목록 in 핵심_키워드_매핑.items():
+        # 품목 또는 사양에서 키워드 검색
+        if 키워드 in 검색_텍스트:
+            for 대상_중분류 in 대상_중분류목록:
+                for 중분류명, 코드목록 in 중분류_검색.items():
+                    if 대상_중분류 in 중분류명 or 중분류명 in 대상_중분류:
+                        대분류코드, 중분류코드 = 코드목록[0]
+                        matches = existing_codes[existing_codes["중분류코드"] == 중분류코드]
+                        if not matches.empty:
+                            row = matches.iloc[0]
+                            return {
+                                "match_type": "exact",
+                                "code": _clean_value(row.get("생성품목코드", "")),
+                                "existing_code": _clean_value(row.get("생성품목코드", "")),
+                                "기존품목명": _clean_value(row.get("생성품목명", row.get("중분류", ""))),
+                                "대분류": _clean_value(row.get("대분류", "")),
+                                "대분류코드": _clean_value(row.get("대분류코드", "")),
+                                "중분류": _clean_value(row.get("중분류", "")),
+                                "중분류코드": 중분류코드,
+                                "규격": _clean_value(row.get("규격", "")),
+                                "규격코드": _clean_value(row.get("규격코드", "")),
+                            }
+
+    # 1. 중분류명에서 품목 검색 (완전 일치에 가까운 경우)
+    for 중분류명, 코드목록 in 중분류_검색.items():
+        # 품목명이 중분류명에 포함되거나, 중분류명이 품목명에 포함되는 경우
+        if 품목_clean in 중분류명 or 중분류명 in 품목_clean:
+            대분류코드, 중분류코드 = 코드목록[0]
+            matches = existing_codes[existing_codes["중분류코드"] == 중분류코드]
+            if not matches.empty:
+                row = matches.iloc[0]
+                return {
+                    "match_type": "exact",
+                    "code": _clean_value(row.get("생성품목코드", "")),
+                    "existing_code": _clean_value(row.get("생성품목코드", "")),
+                    "기존품목명": _clean_value(row.get("생성품목명", row.get("중분류", ""))),
+                    "대분류": _clean_value(row.get("대분류", "")),
+                    "대분류코드": _clean_value(row.get("대분류코드", "")),
+                    "중분류": _clean_value(row.get("중분류", "")),
+                    "중분류코드": 중분류코드,
+                    "규격": _clean_value(row.get("규격", "")),
+                    "규격코드": _clean_value(row.get("규격코드", "")),
+                }
+
+        # 사양이 중분류명에 포함되거나, 중분류명이 사양에 포함되는 경우
+        if 사양_clean in 중분류명 or 중분류명 in 사양_clean:
+            대분류코드, 중분류코드 = 코드목록[0]
+            matches = existing_codes[existing_codes["중분류코드"] == 중분류코드]
+            if not matches.empty:
+                row = matches.iloc[0]
+                return {
+                    "match_type": "exact",
+                    "code": _clean_value(row.get("생성품목코드", "")),
+                    "existing_code": _clean_value(row.get("생성품목코드", "")),
+                    "기존품목명": _clean_value(row.get("생성품목명", row.get("중분류", ""))),
+                    "대분류": _clean_value(row.get("대분류", "")),
+                    "대분류코드": _clean_value(row.get("대분류코드", "")),
+                    "중분류": _clean_value(row.get("중분류", "")),
+                    "중분류코드": 중분류코드,
+                    "규격": _clean_value(row.get("규격", "")),
+                    "규격코드": _clean_value(row.get("규격코드", "")),
+                }
+
+    # 2. 규격명에서 사양 검색 (예: 직관50 -> 50A)
+    규격_검색 = classification.get("규격_검색", {})
+
+    # 숫자 추출하여 비교 (예: 직관50 -> 50, 50A -> 50)
+    사양_숫자 = re.findall(r'\d+', 사양_clean)
+
+    for 규격명, 코드목록 in 규격_검색.items():
+        규격명_숫자 = re.findall(r'\d+', 규격명)
+
+        # 숫자가 일치하는 경우 (예: 직관50 = 50A)
+        if 사양_숫자 and 규격명_숫자 and 사양_숫자[0] == 규격명_숫자[0]:
+            # 추가 조건: 품목명이나 사양에서 관련 키워드 확인
+            # 예: 직관 = 파이프 관련
+            파이프_키워드 = ["직관", "파이프", "배관", "관", "PVD", "엘보", "티", "니플"]
+            if any(kw in 품목_clean or kw in 사양_clean for kw in 파이프_키워드):
+                중분류코드, 규격코드값 = 코드목록[0]
+                matches = existing_codes[
+                    (existing_codes["중분류코드"] == 중분류코드) &
+                    (existing_codes["규격코드"] == 규격코드값)
+                ]
+                if not matches.empty:
+                    row = matches.iloc[0]
+                    return {
+                        "match_type": "exact",
+                        "code": _clean_value(row.get("생성품목코드", "")),
+                        "existing_code": _clean_value(row.get("생성품목코드", "")),
+                        "기존품목명": _clean_value(row.get("생성품목명", row.get("중분류", ""))),
+                        "대분류": _clean_value(row.get("대분류", "")),
+                        "대분류코드": _clean_value(row.get("대분류코드", "")),
+                        "중분류": _clean_value(row.get("중분류", "")),
+                        "중분류코드": 중분류코드,
+                        "규격": _clean_value(row.get("규격", "")),
+                        "규격코드": _clean_value(규격코드값),
+                    }
+
+        # 규격명이 사양에 포함되거나 사양이 규격명에 포함되는 경우
+        if 사양_clean in 규격명 or 규격명 in 사양_clean:
+            중분류코드, 규격코드값 = 코드목록[0]
+            matches = existing_codes[
+                (existing_codes["중분류코드"] == 중분류코드) &
+                (existing_codes["규격코드"] == 규격코드값)
+            ]
+            if not matches.empty:
+                row = matches.iloc[0]
+                return {
+                    "match_type": "exact",
+                    "code": _clean_value(row.get("생성품목코드", "")),
+                    "existing_code": _clean_value(row.get("생성품목코드", "")),
+                    "기존품목명": _clean_value(row.get("생성품목명", row.get("중분류", ""))),
+                    "대분류": _clean_value(row.get("대분류", "")),
+                    "대분류코드": _clean_value(row.get("대분류코드", "")),
+                    "중분류": _clean_value(row.get("중분류", "")),
+                    "중분류코드": 중분류코드,
+                    "규격": _clean_value(row.get("규격", "")),
+                    "규격코드": _clean_value(규격코드값),
+                }
+
+    # 3. 일반 부분 문자열 매칭
+    for 중분류명, 코드목록 in 중분류_검색.items():
+        핵심_키워드 = 품목_clean.replace(" ", "")
+        if len(핵심_키워드) >= 2:
+            if 핵심_키워드 in 중분류명.replace(" ", ""):
+                대분류코드, 중분류코드 = 코드목록[0]
+                matches = existing_codes[existing_codes["중분류코드"] == 중분류코드]
+                if not matches.empty:
+                    row = matches.iloc[0]
+                    return {
+                        "match_type": "similar",
+                        "code": _clean_value(row.get("생성품목코드", "")),
+                        "existing_code": _clean_value(row.get("생성품목코드", "")),
+                        "기존품목명": _clean_value(row.get("생성품목명", row.get("중분류", ""))),
+                        "similarity": 0.85,
+                        "similar_item": {
+                            "코드": _clean_value(row.get("생성품목코드", "")),
+                            "규격": _clean_value(row.get("규격", "")),
+                            "중분류": _clean_value(row.get("중분류", "")),
+                            "대분류": _clean_value(row.get("대분류", "")),
+                        },
+                        "대분류": _clean_value(row.get("대분류", "")),
+                        "대분류코드": _clean_value(row.get("대분류코드", "")),
+                        "중분류": _clean_value(row.get("중분류", "")),
+                        "중분류코드": 중분류코드,
+                        "규격": _clean_value(row.get("규격", "")),
+                        "규격코드": _clean_value(row.get("규격코드", "")),
+                    }
+
+    return None
 
 
 def find_matching_code(
@@ -174,6 +573,7 @@ def find_matching_code(
         "match_type": "new",
         "code": "",
         "existing_code": None,
+        "기존품목명": "",  # 기존 ERP 품목명 (exact/similar 매칭 시 사용)
         "similarity": 0.0,
         "similar_item": None,
         "대분류": "",
@@ -188,6 +588,14 @@ def find_matching_code(
     품목_clean = str(품목).strip()
     사양_clean = str(사양).strip()
     사양_normalized = normalize_spec(사양_clean)
+
+    # 0. 코드분류(최종)에서 먼저 검색 (신규 추가)
+    # ABS문짝, 직관50 등 코드분류에 있는 품목 우선 검색
+    classification_match = search_in_classification(
+        품목_clean, 사양_clean, classification, existing_codes
+    )
+    if classification_match:
+        return classification_match
 
     # 1. 대분류 찾기
     대분류명 = None
@@ -265,8 +673,9 @@ def find_matching_code(
             if not matches.empty:
                 row = matches.iloc[0]
                 result["match_type"] = "exact"
-                result["code"] = str(row.get("품목코드생성", ""))
+                result["code"] = _clean_value(row.get("생성품목코드", ""))
                 result["existing_code"] = result["code"]
+                result["기존품목명"] = _clean_value(row.get("생성품목명", row.get("중분류", "")))
                 return result
         elif "바닥" in 사양_clean or "300*300" in 사양_clean or "300×300" in 사양_clean:
             result["중분류"] = "바닥용 타일 300*300"
@@ -277,8 +686,9 @@ def find_matching_code(
             if not matches.empty:
                 row = matches.iloc[0]
                 result["match_type"] = "exact"
-                result["code"] = str(row.get("품목코드생성", ""))
+                result["code"] = _clean_value(row.get("생성품목코드", ""))
                 result["existing_code"] = result["code"]
+                result["기존품목명"] = _clean_value(row.get("생성품목명", row.get("중분류", "")))
                 return result
         elif "250*400" in 사양_clean or "250×400" in 사양_clean:
             result["중분류"] = "벽체용 타일 250*400"
@@ -287,8 +697,9 @@ def find_matching_code(
             if not matches.empty:
                 row = matches.iloc[0]
                 result["match_type"] = "exact"
-                result["code"] = str(row.get("품목코드생성", ""))
+                result["code"] = _clean_value(row.get("생성품목코드", ""))
                 result["existing_code"] = result["code"]
+                result["기존품목명"] = _clean_value(row.get("생성품목명", row.get("중분류", "")))
                 return result
         elif "200*200" in 사양_clean or "200×200" in 사양_clean:
             result["중분류"] = "바닥용 타일 200*200"
@@ -297,8 +708,9 @@ def find_matching_code(
             if not matches.empty:
                 row = matches.iloc[0]
                 result["match_type"] = "exact"
-                result["code"] = str(row.get("품목코드생성", ""))
+                result["code"] = _clean_value(row.get("생성품목코드", ""))
                 result["existing_code"] = result["code"]
+                result["기존품목명"] = _clean_value(row.get("생성품목명", row.get("중분류", "")))
                 return result
 
     # ============================================
@@ -320,12 +732,12 @@ def find_matching_code(
                 # 첫 번째 점검구 사용 (또는 사양에 맞는 것 선택)
                 row = 점검구_codes.iloc[0]
                 result["match_type"] = "exact"
-                result["code"] = str(row.get("품목코드생성", ""))
+                result["code"] = _clean_value(row.get("생성품목코드", ""))
                 result["existing_code"] = result["code"]
-                result["중분류"] = str(row.get("중분류", ""))
-                result["중분류코드"] = str(row.get("중분류코드", ""))
-                result["규격"] = str(row.get("규격", ""))
-                result["규격코드"] = str(row.get("규격코드", ""))
+                result["중분류"] = _clean_value(row.get("중분류", ""))
+                result["중분류코드"] = _clean_value(row.get("중분류코드", ""))
+                result["규격"] = _clean_value(row.get("규격", ""))
+                result["규격코드"] = _clean_value(row.get("규격코드", ""))
                 return result
 
         # 바디판넬
@@ -336,28 +748,28 @@ def find_matching_code(
                 dims = extract_dimensions(사양_clean)
                 if dims:
                     for _, row in 바디_codes.iterrows():
-                        existing_spec = str(row.get("규격", ""))
+                        existing_spec = _clean_value(row.get("규격", ""))
                         existing_dims = extract_dimensions(existing_spec)
                         if existing_dims == dims:
                             result["match_type"] = "exact"
-                            result["code"] = str(row.get("품목코드생성", ""))
+                            result["code"] = _clean_value(row.get("생성품목코드", ""))
                             result["existing_code"] = result["code"]
-                            result["중분류"] = str(row.get("중분류", ""))
-                            result["중분류코드"] = str(row.get("중분류코드", ""))
+                            result["중분류"] = _clean_value(row.get("중분류", ""))
+                            result["중분류코드"] = _clean_value(row.get("중분류코드", ""))
                             result["규격"] = existing_spec
-                            result["규격코드"] = str(row.get("규격코드", ""))
+                            result["규격코드"] = _clean_value(row.get("규격코드", ""))
                             return result
                 # 규격 매칭 실패시 첫 번째 바디 사용
                 row = 바디_codes.iloc[0]
                 result["match_type"] = "similar"
                 result["similarity"] = 0.8
                 result["similar_item"] = {
-                    "코드": str(row.get("품목코드생성", "")),
-                    "규격": str(row.get("규격", "")),
-                    "중분류": str(row.get("중분류", "")),
+                    "코드": _clean_value(row.get("생성품목코드", "")),
+                    "규격": _clean_value(row.get("규격", "")),
+                    "중분류": _clean_value(row.get("중분류", "")),
                 }
-                result["중분류"] = str(row.get("중분류", ""))
-                result["중분류코드"] = str(row.get("중분류코드", ""))
+                result["중분류"] = _clean_value(row.get("중분류", ""))
+                result["중분류코드"] = _clean_value(row.get("중분류코드", ""))
                 return result
 
         # 사이드판넬
@@ -367,27 +779,27 @@ def find_matching_code(
                 dims = extract_dimensions(사양_clean)
                 if dims:
                     for _, row in 사이드_codes.iterrows():
-                        existing_spec = str(row.get("규격", ""))
+                        existing_spec = _clean_value(row.get("규격", ""))
                         existing_dims = extract_dimensions(existing_spec)
                         if existing_dims == dims:
                             result["match_type"] = "exact"
-                            result["code"] = str(row.get("품목코드생성", ""))
+                            result["code"] = _clean_value(row.get("생성품목코드", ""))
                             result["existing_code"] = result["code"]
-                            result["중분류"] = str(row.get("중분류", ""))
-                            result["중분류코드"] = str(row.get("중분류코드", ""))
+                            result["중분류"] = _clean_value(row.get("중분류", ""))
+                            result["중분류코드"] = _clean_value(row.get("중분류코드", ""))
                             result["규격"] = existing_spec
-                            result["규격코드"] = str(row.get("규격코드", ""))
+                            result["규격코드"] = _clean_value(row.get("규격코드", ""))
                             return result
                 row = 사이드_codes.iloc[0]
                 result["match_type"] = "similar"
                 result["similarity"] = 0.8
                 result["similar_item"] = {
-                    "코드": str(row.get("품목코드생성", "")),
-                    "규격": str(row.get("규격", "")),
-                    "중분류": str(row.get("중분류", "")),
+                    "코드": _clean_value(row.get("생성품목코드", "")),
+                    "규격": _clean_value(row.get("규격", "")),
+                    "중분류": _clean_value(row.get("중분류", "")),
                 }
-                result["중분류"] = str(row.get("중분류", ""))
-                result["중분류코드"] = str(row.get("중분류코드", ""))
+                result["중분류"] = _clean_value(row.get("중분류", ""))
+                result["중분류코드"] = _clean_value(row.get("중분류코드", ""))
                 return result
 
         # GRP천장판 등 일반 검색
@@ -399,11 +811,11 @@ def find_matching_code(
                 result["match_type"] = "similar"
                 result["similarity"] = 0.7
                 result["similar_item"] = {
-                    "코드": str(row.get("품목코드생성", "")),
-                    "규격": str(row.get("규격", "")),
-                    "중분류": str(row.get("중분류", "")),
+                    "코드": _clean_value(row.get("생성품목코드", "")),
+                    "규격": _clean_value(row.get("규격", "")),
+                    "중분류": _clean_value(row.get("중분류", "")),
                 }
-                result["중분류"] = str(row.get("중분류", ""))
+                result["중분류"] = _clean_value(row.get("중분류", ""))
                 return result
 
     # ============================================
@@ -424,41 +836,62 @@ def find_matching_code(
                 # LA/RA 방향은 보류 (L/R 미구분)
                 # 규격만으로 매칭 시도
                 for _, row in 벽체_codes.iterrows():
-                    existing_spec = str(row.get("규격", ""))
+                    existing_spec = _clean_value(row.get("규격", ""))
                     existing_dims = extract_dimensions(existing_spec)
                     if existing_dims and existing_dims == (W, L):
                         result["match_type"] = "exact"
-                        result["code"] = str(row.get("품목코드생성", ""))
+                        result["code"] = _clean_value(row.get("생성품목코드", ""))
                         result["existing_code"] = result["code"]
-                        result["중분류"] = str(row.get("중분류", ""))
-                        result["중분류코드"] = str(row.get("중분류코드", ""))
+                        result["중분류"] = _clean_value(row.get("중분류", ""))
+                        result["중분류코드"] = _clean_value(row.get("중분류코드", ""))
                         result["규격"] = existing_spec
-                        result["규격코드"] = str(row.get("규격코드", ""))
+                        result["규격코드"] = _clean_value(row.get("규격코드", ""))
                         return result
 
         # 사양에서 치수 추출 시도
         dims = extract_dimensions(사양_clean)
         if dims:
             for _, row in 벽체_codes.iterrows():
-                existing_spec = str(row.get("규격", ""))
+                existing_spec = _clean_value(row.get("규격", ""))
                 existing_dims = extract_dimensions(existing_spec)
                 if existing_dims == dims:
                     result["match_type"] = "exact"
-                    result["code"] = str(row.get("품목코드생성", ""))
+                    result["code"] = _clean_value(row.get("생성품목코드", ""))
                     result["existing_code"] = result["code"]
-                    result["중분류"] = str(row.get("중분류", ""))
-                    result["중분류코드"] = str(row.get("중분류코드", ""))
+                    result["중분류"] = _clean_value(row.get("중분류", ""))
+                    result["중분류코드"] = _clean_value(row.get("중분류코드", ""))
                     result["규격"] = existing_spec
-                    result["규격코드"] = str(row.get("규격코드", ""))
+                    result["규격코드"] = _clean_value(row.get("규격코드", ""))
                     return result
 
-        # PU벽판인 경우 - 규격 정보 필요
+        # PU벽판인 경우 - 전체 데이터에서 유사 품목 검색
         if "PU" in 사양_clean.upper():
-            result["중분류"] = "사각형(샤워타입)"
-            result["중분류코드"] = "SQSHT"
-            result["match_type"] = "pending"  # L/R 미정
-            result["규격"] = "L/R 선택 필요"
-            result["규격코드"] = "견적용"
+            # 벽체 코드에서 유사한 규격 검색
+            best_sim = 0.0
+            best_row = None
+            for _, row in 벽체_codes.iterrows():
+                existing_spec = _clean_value(row.get("규격", ""))
+                sim = calculate_similarity(사양_clean, existing_spec)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_row = row
+            if best_row is not None and best_sim >= 0.5:
+                result["match_type"] = "similar"
+                result["similarity"] = best_sim
+                result["code"] = _clean_value(best_row.get("생성품목코드", ""))
+                result["existing_code"] = result["code"]
+                result["기존품목명"] = _clean_value(best_row.get("생성품목명", best_row.get("중분류", "")))
+                result["중분류"] = _clean_value(best_row.get("중분류", ""))
+                result["중분류코드"] = _clean_value(best_row.get("중분류코드", ""))
+                result["규격"] = _clean_value(best_row.get("규격", ""))
+                result["규격코드"] = _clean_value(best_row.get("규격코드", ""))
+                result["similar_item"] = {
+                    "코드": result["code"],
+                    "규격": result["규격"],
+                    "중분류": result["중분류"],
+                    "대분류": result["대분류"],
+                }
+                return result
 
     # 2. 기존 코드에서 완전 일치 검색 (일반)
     if not existing_codes.empty and 대분류명:
@@ -466,45 +899,89 @@ def find_matching_code(
         matches = existing_codes[existing_codes["대분류"].str.strip() == 대분류명.strip()]
 
         for _, row in matches.iterrows():
-            existing_spec = str(row.get("규격", ""))
+            existing_spec = _clean_value(row.get("규격", ""))
             existing_normalized = normalize_spec(existing_spec)
 
             # 정규화된 규격으로 비교
             if existing_normalized == 사양_normalized:
                 result["match_type"] = "exact"
-                result["code"] = str(row.get("품목코드생성", ""))
+                result["code"] = _clean_value(row.get("생성품목코드", ""))
                 result["existing_code"] = result["code"]
-                result["중분류"] = str(row.get("중분류", ""))
-                result["중분류코드"] = str(row.get("중분류코드", ""))
+                result["기존품목명"] = _clean_value(row.get("생성품목명", row.get("중분류", "")))  # 품목명 컬럼 우선
+                result["대분류"] = _clean_value(row.get("대분류", ""))
+                result["대분류코드"] = _clean_value(row.get("대분류코드", ""))
+                result["중분류"] = _clean_value(row.get("중분류", ""))
+                result["중분류코드"] = _clean_value(row.get("중분류코드", ""))
                 result["규격"] = existing_spec
-                result["규격코드"] = str(row.get("규격코드", ""))
+                result["규격코드"] = _clean_value(row.get("규격코드", ""))
                 return result
 
-    # 3. 유사 품목 검색
+    # 3. 유사 품목 검색 (3단계: 대분류 일치 → 전체 규격 → 전체 중분류)
     best_similarity = 0.0
     best_match = None
 
+    # 3-1. 먼저 대분류가 일치하는 항목에서 검색
     if not existing_codes.empty and 대분류명:
         matches = existing_codes[existing_codes["대분류"].str.strip() == 대분류명.strip()]
 
         for _, row in matches.iterrows():
-            existing_spec = str(row.get("규격", ""))
+            existing_spec = _clean_value(row.get("규격", ""))
             sim = calculate_similarity(사양_clean, existing_spec)
 
             if sim > best_similarity and sim >= threshold:
                 best_similarity = sim
                 best_match = row
 
+    # 3-2. 대분류 매칭 실패 시, 전체 데이터에서 규격명으로 검색
+    if best_match is None and not existing_codes.empty:
+        # 오타 수정 적용한 사양으로 검색
+        사양_corrected = normalize_for_matching(사양_clean)
+
+        for _, row in existing_codes.iterrows():
+            existing_spec = _clean_value(row.get("규격", ""))
+            existing_corrected = normalize_for_matching(existing_spec)
+
+            # 정규화 후 완전 일치 체크
+            if 사양_corrected == existing_corrected:
+                best_similarity = 1.0
+                best_match = row
+                break
+
+            # 유사도 검사
+            sim = calculate_similarity(사양_clean, existing_spec)
+            if sim > best_similarity and sim >= threshold:
+                best_similarity = sim
+                best_match = row
+
+    # 3-3. 규격 매칭 실패 시, 중분류명에서 유사 품목 검색
+    if best_match is None and not existing_codes.empty:
+        for _, row in existing_codes.iterrows():
+            existing_중분류 = _clean_value(row.get("중분류", ""))
+
+            # 중분류명에 품목명이나 사양이 포함되어 있는지 확인
+            sim = calculate_similarity(사양_clean, existing_중분류)
+            if sim > best_similarity and sim >= threshold * 0.9:  # 중분류는 임계값 낮춤
+                best_similarity = sim
+                best_match = row
+
     if best_match is not None:
         result["match_type"] = "similar"
         result["similarity"] = best_similarity
+        result["code"] = _clean_value(best_match.get("생성품목코드", ""))
+        result["existing_code"] = result["code"]
+        result["기존품목명"] = _clean_value(best_match.get("생성품목명", best_match.get("중분류", "")))  # 품목명 컬럼 우선
         result["similar_item"] = {
-            "코드": str(best_match.get("품목코드생성", "")),
-            "규격": str(best_match.get("규격", "")),
-            "중분류": str(best_match.get("중분류", "")),
+            "코드": _clean_value(best_match.get("생성품목코드", "")),
+            "규격": _clean_value(best_match.get("규격", "")),
+            "중분류": _clean_value(best_match.get("중분류", "")),
+            "대분류": _clean_value(best_match.get("대분류", "")),
         }
-        result["중분류"] = str(best_match.get("중분류", ""))
-        result["중분류코드"] = str(best_match.get("중분류코드", ""))
+        result["대분류"] = _clean_value(best_match.get("대분류", "")) or result["대분류"]
+        result["대분류코드"] = _clean_value(best_match.get("대분류코드", "")) or result["대분류코드"]
+        result["중분류"] = _clean_value(best_match.get("중분류", ""))
+        result["중분류코드"] = _clean_value(best_match.get("중분류코드", ""))
+        result["규격"] = _clean_value(best_match.get("규격", ""))
+        result["규격코드"] = _clean_value(best_match.get("규격코드", ""))
 
     # 4. 중분류 찾기 (사양에서 추론)
     if not result["중분류"]:
@@ -574,16 +1051,29 @@ def find_matching_code(
 
 def generate_품목명(대분류: str, 중분류: str, 규격: str) -> str:
     """품목명 생성 (예: GRP바닥판 사각형(욕조) 1400*1900좌)"""
-    parts = [대분류]
+    parts = []
+    if 대분류:
+        parts.append(str(대분류).strip())
     if 중분류:
-        parts.append(중분류)
+        parts.append(str(중분류).strip())
     if 규격:
-        parts.append(규격)
+        parts.append(str(규격).strip())
     return " ".join(parts)
 
 
-def extract_floor_erp_spec(floor_result: dict) -> dict:
-    """바닥판 계산 결과에서 ERP 규격 정보 추출"""
+def get_existing_품목명_from_row(row) -> str:
+    """ERP 데이터 행에서 기존 품목명 추출 (중분류 = 품목명)"""
+    return _clean_value(row.get("중분류", "")).strip()
+
+
+def extract_floor_erp_spec(floor_result: dict, direction_override: str = None) -> dict:
+    """바닥판 계산 결과에서 ERP 규격 정보 추출
+
+    Args:
+        floor_result: 바닥판 계산 결과
+        direction_override: 사용자가 지정한 방향 ("좌" 또는 "우").
+                           계산 결과에 방향이 없을 때 사용.
+    """
     if not floor_result:
         return None
 
@@ -598,16 +1088,21 @@ def extract_floor_erp_spec(floor_result: dict) -> dict:
     W = inputs.get("W", 0)
     L = inputs.get("L", 0)
 
-    # 방향 추출 (좌/우)
+    # 방향 추출 (좌/우) - 계산 결과 우선, 없으면 사용자 지정값 사용
     direction = inputs.get("direction", "")  # 'left' or 'right' or ''
     direction_kr = ""
     direction_code = ""
+
     if direction == "left" or direction == "좌":
         direction_kr = "좌"
         direction_code = "L"
     elif direction == "right" or direction == "우":
         direction_kr = "우"
         direction_code = "R"
+    elif direction_override:
+        # 계산 결과에 방향이 없으면 사용자 지정값 사용
+        direction_kr = direction_override
+        direction_code = "L" if direction_override == "좌" else "R"
 
     # 주거약자 여부
     is_senior = inputs.get("user_type", "") == "주거약자"
@@ -729,13 +1224,20 @@ with st.spinner("ERP 코드 데이터 로딩 중..."):
     classification = load_code_classification()
     existing_codes = load_existing_codes()
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 with col1:
     st.metric("대분류 개수", len(classification.get("대분류", {})))
 with col2:
     st.metric("중분류 개수", len(classification.get("중분류", {})))
 with col3:
     st.metric("기존 코드 수", len(existing_codes))
+with col4:
+    st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+    if st.button("ERP매칭용 시트 갱신", help="251113 + 코드분류(최종) 데이터를 병합하여 ERP매칭용 시트를 다시 생성합니다"):
+        with st.spinner("ERP매칭용 시트 갱신 중..."):
+            if refresh_erp_matching_sheet():
+                st.success("ERP매칭용 시트가 갱신되었습니다!")
+                st.rerun()
 
 st.markdown("---")
 
@@ -771,9 +1273,42 @@ floor_result = st.session_state.get(FLOOR_RESULT_KEY)
 wall_result = st.session_state.get(WALL_RESULT_KEY)
 ceil_result = st.session_state.get(CEIL_RESULT_KEY)
 
+# 바닥판 L/R 방향 선택 (바닥판 계산에서 방향 정보가 없는 경우 사용자가 지정)
+st.markdown("---")
+st.subheader("바닥판 방향 설정")
+
+# 바닥판 계산 결과에서 방향 정보 확인
+floor_direction_from_calc = None
+if floor_result:
+    floor_inputs = floor_result.get("inputs", {})
+    floor_direction_from_calc = floor_inputs.get("direction", "")
+
+# 방향이 없거나 미지정인 경우 사용자가 선택
+if not floor_direction_from_calc or floor_direction_from_calc not in ["left", "right", "좌", "우"]:
+    st.info("바닥판 계산 결과에 방향(L/R) 정보가 없습니다. 아래에서 방향을 선택해주세요.")
+    floor_direction_choice = st.radio(
+        "바닥판 방향 선택",
+        options=["좌 (L)", "우 (R)"],
+        index=0,  # 기본값: 좌
+        horizontal=True,
+        help="욕조 배수구 위치 기준으로 좌/우를 선택합니다."
+    )
+    # 선택값을 세션에 저장
+    if "floor_direction_override" not in st.session_state:
+        st.session_state["floor_direction_override"] = "좌"
+    st.session_state["floor_direction_override"] = "좌" if "좌" in floor_direction_choice else "우"
+else:
+    # 이미 방향이 있는 경우 표시만
+    dir_display = "좌 (L)" if floor_direction_from_calc in ["left", "좌"] else "우 (R)"
+    st.success(f"바닥판 계산 결과에서 방향이 확인되었습니다: **{dir_display}**")
+    st.session_state["floor_direction_override"] = "좌" if floor_direction_from_calc in ["left", "좌"] else "우"
+
 # 전체 품목 추출
 st.markdown("---")
 st.subheader("1단계: 전체 품목 추출")
+
+# 사용자 지정 방향 가져오기
+floor_direction_override = st.session_state.get("floor_direction_override", "좌")
 
 # 원본 계산 결과 표시
 with st.expander("원본 계산 결과 (바닥판/벽판/천장판)", expanded=False):
@@ -782,7 +1317,7 @@ with st.expander("원본 계산 결과 (바닥판/벽판/천장판)", expanded=F
     with col1:
         st.markdown("**바닥판**")
         if floor_result:
-            floor_spec = extract_floor_erp_spec(floor_result)
+            floor_spec = extract_floor_erp_spec(floor_result, floor_direction_override)
             if floor_spec:
                 st.write(f"- 재질: {floor_spec['재질']}")
                 st.write(f"- 규격: {floor_spec['규격_W']}×{floor_spec['규격_L']}")
@@ -814,13 +1349,13 @@ with st.expander("원본 계산 결과 (바닥판/벽판/천장판)", expanded=F
 # 모든 견적에서 고유 품목 추출
 all_items = {}  # key: (품목, 사양) -> value: {수량 합계, 단가 등}
 
-# 바닥판은 원본 계산 결과에서 규격 정보를 가져옴
-floor_spec_info = extract_floor_erp_spec(floor_result) if floor_result else None
+# 바닥판은 원본 계산 결과에서 규격 정보를 가져옴 (사용자 지정 방향 적용)
+floor_spec_info = extract_floor_erp_spec(floor_result, floor_direction_override) if floor_result else None
 
 for q in saved_quotations:
     for row in q.get("rows", []):
-        품목 = str(row.get("품목", "")).strip()
-        사양 = str(row.get("사양 및 규격", "")).strip()
+        품목 = _clean_value(row.get("품목", "")).strip()
+        사양 = _clean_value(row.get("사양 및 규격", "")).strip()
         수량 = float(row.get("수량", 0) or 0)
         단가 = float(row.get("단가", 0) or 0)
 
@@ -890,11 +1425,16 @@ if st.button("품목코드 매칭 실행", type="primary"):
         result["사양"] = item["사양"]
         result["수량"] = item["총수량"]
         result["단가"] = item["단가"]
-        result["생성품목명"] = generate_품목명(
-            result["대분류"],
-            result["중분류"],
-            result["규격"]
-        )
+
+        # 생성품목명 결정: 기존 코드 매칭 시 기존품목명 사용, 신규는 자동 생성
+        if result["match_type"] in ["exact", "similar"] and result.get("기존품목명"):
+            result["생성품목명"] = result["기존품목명"]
+        else:
+            result["생성품목명"] = generate_품목명(
+                result["대분류"],
+                result["중분류"],
+                result["규격"]
+            )
 
         matching_results.append(result)
         progress_bar.progress((i + 1) / len(items_list))
@@ -941,6 +1481,7 @@ if matching_results:
                 }
                 for r in exact_results
             ])
+            exact_df = exact_df.fillna("")  # NaN 제거
             st.dataframe(exact_df, use_container_width=True, hide_index=True)
         else:
             st.info("완전 일치 품목이 없습니다.")
@@ -987,11 +1528,12 @@ if matching_results:
                     "생성 코드": r["code"],
                     "대분류": r["대분류"],
                     "중분류": r["중분류"],
-                    "규격코드": r["규격코드"],
+                    "규격코드": r.get("규격코드", "") or "",
                     "수량": r["수량"],
                 }
                 for r in new_results
             ])
+            new_df = new_df.fillna("")  # NaN 제거
             st.dataframe(new_df, use_container_width=True, hide_index=True)
         else:
             st.info("신규 생성 품목이 없습니다.")
@@ -1201,12 +1743,25 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 기존 ERP 코드 검색")
-    search_term = st.text_input("규격 검색", placeholder="예: 1500*2200")
+    search_term = st.text_input("검색 (품목명, 규격)", placeholder="예: 1500*2200 또는 실리콘")
     if search_term and not existing_codes.empty:
-        search_results = existing_codes[
-            existing_codes["규격"].str.contains(search_term, case=False, na=False)
-        ]
+        # 규격 또는 생성품목명(중분류)에서 검색
+        mask = (
+            existing_codes["규격"].str.contains(search_term, case=False, na=False) |
+            existing_codes["생성품목명"].str.contains(search_term, case=False, na=False) |
+            existing_codes["중분류"].str.contains(search_term, case=False, na=False)
+        )
+        search_results = existing_codes[mask]
+
         if not search_results.empty:
-            st.dataframe(search_results[["품목코드생성", "대분류", "중분류", "규격"]].head(10))
+            st.dataframe(search_results[["생성품목코드", "생성품목명", "대분류", "규격"]].head(10))
         else:
             st.info("검색 결과 없음")
+
+    st.markdown("---")
+    st.markdown("### ERP매칭용 시트 관리")
+    if st.button("시트 갱신", help="251113 시트 데이터로 ERP매칭용 시트를 다시 생성합니다"):
+        with st.spinner("갱신 중..."):
+            if refresh_erp_matching_sheet():
+                st.success("ERP매칭용 시트가 갱신되었습니다!")
+                st.rerun()

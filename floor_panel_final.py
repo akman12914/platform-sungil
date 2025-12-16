@@ -52,6 +52,12 @@ SHARED_SHOWER_WIDTH_KEY = "shared_shower_width"
 SHARED_SHOWER_LENGTH_KEY = "shared_shower_length"
 SHARED_MATERIAL_KEY = "shared_floor_material"
 
+# 코너형 치수 공유 키 (v3, v4, v5, v6)
+SHARED_CORNER_V3_KEY = "shared_corner_v3"  # 세면부 길이
+SHARED_CORNER_V4_KEY = "shared_corner_v4"  # 오목 세로
+SHARED_CORNER_V5_KEY = "shared_corner_v5"  # 샤워부 길이
+SHARED_CORNER_V6_KEY = "shared_corner_v6"  # 샤워부 폭
+
 # =========================================
 # Utility Functions
 # =========================================
@@ -698,6 +704,19 @@ st.session_state[SHARED_SINK_LENGTH_KEY] = sl
 st.session_state[SHARED_SHOWER_WIDTH_KEY] = shw
 st.session_state[SHARED_SHOWER_LENGTH_KEY] = shl
 st.session_state[SHARED_MATERIAL_KEY] = result["소재"]
+
+# 코너형인 경우 v3, v4, v5, v6 값도 저장
+if shape == "코너형" and v3 is not None:
+    st.session_state[SHARED_CORNER_V3_KEY] = v3
+    st.session_state[SHARED_CORNER_V4_KEY] = v4
+    st.session_state[SHARED_CORNER_V5_KEY] = v5
+    st.session_state[SHARED_CORNER_V6_KEY] = v6
+else:
+    # 사각형인 경우 코너형 값 초기화
+    st.session_state[SHARED_CORNER_V3_KEY] = None
+    st.session_state[SHARED_CORNER_V4_KEY] = None
+    st.session_state[SHARED_CORNER_V5_KEY] = None
+    st.session_state[SHARED_CORNER_V6_KEY] = None
 
 # ====== floor.json 저장 + 다운로드 버튼 ======
 floor_payload = {

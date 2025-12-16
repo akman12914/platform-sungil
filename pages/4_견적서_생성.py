@@ -239,16 +239,19 @@ def convert_wall_data(wall_result: dict) -> dict:
         return {}
 
     result = wall_result.get("result", {})
-    counts = result.get("counts", {})
     inputs = wall_result.get("inputs", {})
 
-    # 소계 사용 (관리비 제외)
-    unit_price = result.get("소계", 0)
+    # 벽판 1장당 생산원가 사용 (ad_per_panel)
+    unit_price = result.get("ad_per_panel", 0)
+
+    # wall_panel_final.py는 "total_panels" 키를 사용
+    total_panels = int(result.get("total_panels", 0))
 
     return {
-        "총개수": counts.get("n_panels", 0),
+        "총개수": total_panels,
         "단가": unit_price,
         "벽타일": inputs.get("tile", "300×600"),
+        "production_cost": result.get("production_cost", 0),
     }
 
 
@@ -684,39 +687,42 @@ st.subheader("품목 설정")
 col_floor_type, col_shape_type = st.columns(2)
 
 with col_floor_type:
-    # 바닥판 재질에서 종류 추출
+    # 바닥판 재질에서 종류 추출 (바닥판 페이지에서 결정된 값 사용)
     floor_material = floor_data.get("재질", "").upper() if floor_data else ""
 
     # PP/PE, PVE는 PP로, GRP/SMC/FRP는 GRP로 매핑
     if "PP" in floor_material or "PE" in floor_material or "PVE" in floor_material:
-        default_floor_type = "PP"
+        floor_type = "PP"
     else:
-        default_floor_type = "GRP"
+        floor_type = "GRP"
 
-    prev_floor_type = st.session_state.get(AUTO_FLOOR_TYPE_KEY, default_floor_type)
-
-    floor_type = st.radio(
+    # 바닥판에서 넘어온 값 표시 (수정 불가)
+    st.radio(
         "바닥판 종류",
         options=["PP", "GRP"],
-        index=0 if prev_floor_type == "PP" else 1,
+        index=0 if floor_type == "PP" else 1,
         horizontal=True,
-        help="PP: PP/PE/PVE 바닥판, GRP: GRP/SMC/FRP 바닥판",
-        key="floor_type_radio"
+        help="바닥판 페이지에서 지정된 값 (수정 불가)",
+        key="floor_type_radio",
+        disabled=True  # 수정 불가
     )
 
 with col_shape_type:
-    prev_shape_type = st.session_state.get(AUTO_SHAPE_TYPE_KEY, "사각형")
+    # 바닥판 페이지에서 저장된 형태 값 사용 (shared_bath_shape)
+    shape_type = st.session_state.get("shared_bath_shape", "사각형")
 
-    shape_type = st.radio(
+    # 바닥판에서 넘어온 값 표시 (수정 불가)
+    st.radio(
         "욕실 형태",
         options=["사각형", "코너형"],
-        index=0 if prev_shape_type == "사각형" else 1,
+        index=0 if shape_type == "사각형" else 1,
         horizontal=True,
-        help="사각형: 코너마감재 3개, 코너형: 코너마감재 5개 + 코너비드 1개",
-        key="shape_type_radio"
+        help="바닥판 페이지에서 지정된 값 (수정 불가)",
+        key="shape_type_radio",
+        disabled=True  # 수정 불가
     )
 
-# 변경 감지
+# 변경 감지 (바닥판 페이지에서 값이 변경된 경우)
 floor_type_changed = st.session_state.get(AUTO_FLOOR_TYPE_KEY) != floor_type
 shape_type_changed = st.session_state.get(AUTO_SHAPE_TYPE_KEY) != shape_type
 
@@ -917,19 +923,12 @@ else:
 
     # 2) 벽판 & 타일
     if wall_data:
-        # PU벽판
+        # PU벽판 - 1개로 표시, 단가는 총 금액
         wall_spec = "PU벽판"
-        rec = find_item(price_df, "벽판", "PU타일 벽체", spec_contains="PU벽판")
-        qty = float(wall_data.get("총개수", 0))
-        unit_price = None
-        if rec is not None:
-            unit_price = rec.get("단가", None)
-        else:
-            unit_price = float(wall_data.get("단가", 0))
-            warnings.append(
-                "벽판(PU벽판) 단가를 엑셀에서 찾지 못해 기본값 0으로 설정했습니다."
-            )
-        add_row(rows, "벽판", wall_spec, qty, unit_price)
+        total_qty = float(wall_data.get("총개수", 0))
+        unit_price_per_panel = float(wall_data.get("단가", 0))
+        total_wall_price = total_qty * unit_price_per_panel
+        add_row(rows, "벽판", wall_spec, 1, total_wall_price)
 
         # 벽타일 & 바닥타일 규격 연동
         tile_str = str(wall_data.get("벽타일", "")).replace("×", "x").replace(" ", "")
@@ -1644,6 +1643,16 @@ if rows:
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
+        # 같은 대분류(품목)끼리 연속 배치되도록 정렬
+        # 원래 등장 순서를 유지하면서 같은 품목끼리 모음
+        category_order = {}
+        for i, cat in enumerate(df["품목"]):
+            if cat not in category_order:
+                category_order[cat] = i
+        df = df.copy()
+        df["_sort_key"] = df["품목"].map(category_order)
+        df = df.sort_values("_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
+
         wb = Workbook()
         ws = wb.active
         ws.title = "원자재 세대당 단가내역"
@@ -1774,6 +1783,37 @@ if rows:
         row_num = 7
         current_category = None
 
+        # 각 대분류별 시작/끝 행 계산
+        category_rows = {}
+        temp_row = 7
+        for idx, row_data in df.iterrows():
+            품목 = str(row_data["품목"])
+            if 품목 not in category_rows:
+                category_rows[품목] = {"start": temp_row, "end": temp_row}
+            else:
+                category_rows[품목]["end"] = temp_row
+            temp_row += 1
+
+        # 대분류 열 테두리 스타일 정의
+        top_only_border = Border(
+            left=Side(style="thin"),
+            right=Side(style="thin"),
+            top=Side(style="thin"),
+            bottom=Side(style=None)
+        )
+        middle_border = Border(
+            left=Side(style="thin"),
+            right=Side(style="thin"),
+            top=Side(style=None),
+            bottom=Side(style=None)
+        )
+        bottom_only_border = Border(
+            left=Side(style="thin"),
+            right=Side(style="thin"),
+            top=Side(style=None),
+            bottom=Side(style="thin")
+        )
+
         for idx, row_data in df.iterrows():
             품목 = str(row_data["품목"])
             사양 = str(row_data["사양 및 규격"])
@@ -1790,7 +1830,24 @@ if rows:
                 cell_a.value = ""
             cell_a.font = data_font
             cell_a.alignment = left_align
-            cell_a.border = thin_border
+
+            # 대분류 열 테두리 설정
+            cat_info = category_rows.get(품목, {})
+            start_row = cat_info.get("start", row_num)
+            end_row = cat_info.get("end", row_num)
+
+            if start_row == end_row:
+                # 단일 행이면 전체 테두리
+                cell_a.border = thin_border
+            elif row_num == start_row:
+                # 첫 행: 위 테두리만
+                cell_a.border = top_only_border
+            elif row_num == end_row:
+                # 마지막 행: 아래 테두리만
+                cell_a.border = bottom_only_border
+            else:
+                # 중간 행: 좌우만
+                cell_a.border = middle_border
 
             # 사양 및 규격
             ws.cell(row=row_num, column=START_COL + 1).value = 사양
@@ -2075,6 +2132,13 @@ if rows:
                     seen.add(key)
                     all_items.append(key)
 
+        # 같은 대분류(품목)끼리 연속 배치되도록 정렬
+        category_order = {}
+        for i, (품목, 사양) in enumerate(all_items):
+            if 품목 not in category_order:
+                category_order[품목] = i
+        all_items = sorted(all_items, key=lambda x: category_order[x[0]])
+
         # 컬럼 구조 계산
         # 품목(1) + 사양(1) + [수량,단가,금액] × num_types + 비고(1)
         START_COL = 1
@@ -2186,6 +2250,36 @@ if rows:
                 item_dict[key] = r
             type_data.append(item_dict)
 
+        # 각 대분류별 시작/끝 행 계산
+        category_rows = {}
+        temp_row = 8
+        for 품목, 사양 in all_items:
+            if 품목 not in category_rows:
+                category_rows[품목] = {"start": temp_row, "end": temp_row}
+            else:
+                category_rows[품목]["end"] = temp_row
+            temp_row += 1
+
+        # 대분류 열 테두리 스타일 정의
+        top_only_border = Border(
+            left=Side(style="thin"),
+            right=Side(style="thin"),
+            top=Side(style="thin"),
+            bottom=Side(style=None)
+        )
+        middle_border = Border(
+            left=Side(style="thin"),
+            right=Side(style="thin"),
+            top=Side(style=None),
+            bottom=Side(style=None)
+        )
+        bottom_only_border = Border(
+            left=Side(style="thin"),
+            right=Side(style="thin"),
+            top=Side(style=None),
+            bottom=Side(style="thin")
+        )
+
         for 품목, 사양 in all_items:
             # 품목 (카테고리 변경시만 표시)
             cell_cat = ws.cell(row=row_num, column=START_COL)
@@ -2196,7 +2290,24 @@ if rows:
                 cell_cat.value = ""
             cell_cat.font = data_font
             cell_cat.alignment = left_align
-            cell_cat.border = thin_border
+
+            # 대분류 열 테두리 설정
+            cat_info = category_rows.get(품목, {})
+            start_row = cat_info.get("start", row_num)
+            end_row = cat_info.get("end", row_num)
+
+            if start_row == end_row:
+                # 단일 행이면 전체 테두리
+                cell_cat.border = thin_border
+            elif row_num == start_row:
+                # 첫 행: 위 테두리만
+                cell_cat.border = top_only_border
+            elif row_num == end_row:
+                # 마지막 행: 아래 테두리만
+                cell_cat.border = bottom_only_border
+            else:
+                # 중간 행: 좌우만
+                cell_cat.border = middle_border
 
             # 사양 및 규격
             ws.cell(row=row_num, column=SPEC_COL).value = 사양

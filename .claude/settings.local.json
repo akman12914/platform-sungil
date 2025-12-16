@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(\".venv/Scripts/python\" -c \"\n# -*- coding: utf-8 -*-\nimport pandas as pd\nimport sys\nsys.stdout.reconfigure(encoding=''utf-8'')\n\nfile_path = ''강우수정코드/2. LGE 창원 스마트파크1 기숙사 신축공사 시스템욕실공사 세대당 단가 내역서-이사님검토.xls''\ndf = pd.read_excel(file_path, sheet_name=0, header=None)\n\nprint(''=== 헤더 구조 (4~6행) ==='')\nprint(df.iloc[4:7, 0:16].to_string())\nprint()\nprint(''=== 전체 컬럼 수 ==='')\nprint(f''컬럼 수: {len(df.columns)}'')\nprint()\nprint(''=== 마지막 부분 (합계 등) ==='')\nprint(df.tail(20).to_string())\n\")"
+      "Bash(python:*)",
+      "Bash(chcp 6500)",
+      "Bash(python -m py_compile:*)",
+      "Bash(chcp 65001)",
+      "Bash(python3 -m pip:*)",
+      "Bash(cat:*)",
+      "Bash(python3 -c \"\nimport re\n\nwith open(''4_견적서_생성.py'', ''r'', encoding=''utf-8'') as f:\n    content = f.read()\n\n# 수정 1: convert_wall_data 함수\nold_text = ''''''    # 소계 사용 (관리비 제외)\n    unit_price = result.get(\"\"소계\"\", 0)\n\n    # wall_panel_final.py는 \"\"total_panels\"\" 키를 사용\n    total_panels = int(result.get(\"\"total_panels\"\", 0))\n\n    return {\n        \"\"총개수\"\": total_panels,\n        \"\"단가\"\": unit_price,\n        \"\"벽타일\"\": inputs.get(\"\"tile\"\", \"\"300×600\"\"),\n    }''''''\n\nnew_text = ''''''    # 벽판 1장당 생산원가 사용 (ad_per_panel)\n    unit_price = result.get(\"\"ad_per_panel\"\", 0)\n\n    # wall_panel_final.py는 \"\"total_panels\"\" 키를 사용\n    total_panels = int(result.get(\"\"total_panels\"\", 0))\n\n    return {\n        \"\"총개수\"\": total_panels,\n        \"\"단가\"\": unit_price,\n        \"\"벽타일\"\": inputs.get(\"\"tile\"\", \"\"300×600\"\"),\n        \"\"production_cost\"\": result.get(\"\"production_cost\"\", 0),\n    }''''''\n\nif old_text in content:\n    content = content.replace(old_text, new_text)\n    with open(''4_견적서_생성.py'', ''w'', encoding=''utf-8'') as f:\n        f.write(content)\n    print(''수정 완료: convert_wall_data'')\nelse:\n    print(''기존 텍스트를 찾지 못함'')\n    # 현재 상태 확인\n    if ''ad_per_panel'' in content:\n        print(''이미 ad_per_panel로 수정됨'')\n    else:\n        print(''소계가 있는지 확인:'', ''소계'' in content)\n\")"
     ],
     "deny": [],
     "ask": []

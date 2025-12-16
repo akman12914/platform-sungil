@@ -502,8 +502,6 @@ def compute_cost_for_bathroom(
     tile_set_price: float,
     tile_unit_price: float,
     total_labor_cost_per_day: float = TOTAL_LABOR_COST_PER_DAY,
-    production_overhead_rate: float = 0.20,
-    sales_admin_rate: float = 0.20,
 ) -> Dict[str, float]:
     """
     판넬 1장당 기준으로 AD_panel을 만들고,
@@ -582,14 +580,6 @@ def compute_cost_for_bathroom(
     # 욕실 1세트당 생산원가 (AD_set)
     production_cost = ad_per_panel * total_panels
 
-    # ── ⑥ 생산관리비 / 영업관리비 (세트 기준) ─────────────
-    #    엑셀 로직: AD_set / (1 - rₚ) / (1 - rₛ)
-    cost_with_prod_ovhd = production_cost / (1.0 - production_overhead_rate)
-    production_overhead = cost_with_prod_ovhd - production_cost
-
-    final_cost = cost_with_prod_ovhd / (1.0 - sales_admin_rate)
-    sales_admin_overhead = final_cost - cost_with_prod_ovhd
-
     return {
         "spec_code": spec_code,
         "bath_type": bath_type,
@@ -627,10 +617,6 @@ def compute_cost_for_bathroom(
 
         "ad_per_panel": ad_per_panel,                # ★ AD_panel
         "production_cost": production_cost,          # AD_set
-        "production_overhead": production_overhead,
-        "cost_with_production_overhead": cost_with_prod_ovhd,
-        "sales_admin_overhead": sales_admin_overhead,
-        "final_cost": final_cost,
     }
 
 @dataclass
@@ -969,6 +955,15 @@ def draw_corner_preview(
     img = Image.new("RGB", (IMG_W, CANVAS_H), "white")
     drw = ImageDraw.Draw(img)
 
+    # 한글 폰트 로드
+    try:
+        font = ImageFont.truetype("malgun.ttf", 14)
+    except Exception:
+        try:
+            font = ImageFont.truetype("C:/Windows/Fonts/malgun.ttf", 14)
+        except Exception:
+            font = ImageFont.load_default()
+
     # 좌표 변환 (0,0 이 욕실 왼쪽 위 모서리라고 가정)
     x0 = MARGIN + EXTRA_X
     y0 = MARGIN
@@ -1017,6 +1012,17 @@ def draw_corner_preview(
         (X(cx) - 18, Y(cy) - 7),
         "샤워부",
         fill="black",
+        font=font,
+    )
+
+    # 세면부 라벨 (왼쪽 영역 중앙)
+    semyen_cx = W3 / 2.0
+    semyen_cy = W2 / 2.0
+    drw.text(
+        (X(semyen_cx) - 18, Y(semyen_cy) - 7),
+        "세면부",
+        fill="black",
+        font=font,
     )
 
     # 4) 세면/샤워 경계선 (W3 위치)
@@ -1025,19 +1031,20 @@ def draw_corner_preview(
 
     # 5) 라벨 W1~W6 위치
     off = 14
+    off_x = 30  # 가로 방향 오프셋 (W4, W2 등 세로 라벨용)
 
     # W1: 바닥(가로 전체)
-    drw.text((X(W1 / 2.0),           Y(W2) + off), "W1", fill="black")
+    drw.text((X(W1 / 2.0) - 8,       Y(W2) + off), "W1", fill="black")
     # W2: 왼쪽 세로 벽 전체
-    drw.text((X(0) - off,            Y(W2 / 2.0)), "W2", fill="black")
+    drw.text((X(0) - off_x,          Y(W2 / 2.0) - 7), "W2", fill="black")
     # W3: 상단 왼쪽(세면부 길이)
-    drw.text((X(W3 / 2.0),           Y(0) - off),  "W3", fill="black")
+    drw.text((X(W3 / 2.0) - 8,       Y(0) - off),  "W3", fill="black")
     # W4: 오목부 세로폭 (오목부 왼쪽 라인 중간)
-    drw.text((X(notch_x0) - off,     Y(notch_y1 / 2.0)), "W4", fill="black")
+    drw.text((X(notch_x0) - off_x,   Y(notch_y1 / 2.0) - 7), "W4", fill="black")
     # W5: 오목부/샤워 가로폭 (오목부/샤워 경계 아래)
-    drw.text((X(W1 - W5 / 2.0),      Y(notch_y1) + off), "W5", fill="black")
+    drw.text((X(W1 - W5 / 2.0) - 8,  Y(notch_y1) + off), "W5", fill="black")
     # W6: 우측 세로 벽 중 샤워부 쪽이 강조되도록 약간 아래쪽
-    drw.text((X(W1) + off,           Y(W2 / 2.0) + 30),  "W6", fill="black")
+    drw.text((X(W1) + off,           Y(W4 + W6 / 2.0) - 7),  "W6", fill="black")
 
     return img
 
@@ -1851,4 +1858,4 @@ else:
                 st.warning("규칙 적용 실패/제약 위반 벽면")
                 st.dataframe(pd.DataFrame(errs).rename(columns={"face_w":"벽면폭","face_h":"벽면높이"}), use_container_width=True)
 
-st.caption("※ 새 엔진 적용 + 벽판 단가/소계/생산·영업관리비 자동계산 + JSON 내보내기까지 포함.")
+st.caption("※ 새 엔진 적용 + 벽판 단가/소계 자동계산 + JSON 내보내기까지 포함.")

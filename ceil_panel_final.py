@@ -54,6 +54,12 @@ SHARED_BATH_LENGTH_KEY = "shared_bath_length"  # 욕실 길이 (L)
 SHARED_SINK_WIDTH_KEY = "shared_sink_width"  # 세면부 폭 (경계선 정보, split용)
 SHARED_MATERIAL_KEY = "shared_floor_material"  # 바닥판 재료
 
+# 코너형 치수 공유 키 (v3, v4, v5, v6) - 바닥판에서 입력, 천장판/벽판에서 사용
+SHARED_CORNER_V3_KEY = "shared_corner_v3"  # 세면부 길이
+SHARED_CORNER_V4_KEY = "shared_corner_v4"  # 오목 세로
+SHARED_CORNER_V5_KEY = "shared_corner_v5"  # 샤워부 길이
+SHARED_CORNER_V6_KEY = "shared_corner_v6"  # 샤워부 폭
+
 # =========================================
 # 전역 상수
 # =========================================
@@ -1790,19 +1796,35 @@ if bath_type == "사각형 욕실":
     calc_btn = st.button("계산 실행", type="primary")
 
 else:
-    # 코너형: 바닥판 치수를 참고값으로 표시
-    if shared_width and shared_length:
-        st.info(f"ℹ️ 참고: 바닥판 전체 치수 {shared_width}×{shared_length}mm")
+    # 코너형: 바닥판에서 저장된 치수를 고정으로 사용
+    shared_v3 = st.session_state.get(SHARED_CORNER_V3_KEY)
+    shared_v4 = st.session_state.get(SHARED_CORNER_V4_KEY)
+    shared_v5 = st.session_state.get(SHARED_CORNER_V5_KEY)
+    shared_v6 = st.session_state.get(SHARED_CORNER_V6_KEY)
+
+    # 바닥판에서 코너형 치수를 입력하지 않은 경우 안내
+    if shared_v3 is None or shared_v4 is None or shared_v5 is None or shared_v6 is None:
+        st.error("❌ 바닥판에서 코너형 치수(v3, v4, v5, v6)를 먼저 입력해주세요.")
+        st.info("바닥판 계산 페이지에서 '코너형' 형태를 선택하고 계산을 실행하면 치수가 자동으로 공유됩니다.")
+        st.stop()
+
+    # 바닥판에서 가져온 값을 고정으로 사용
+    v3 = int(shared_v3)
+    v4 = int(shared_v4)
+    v5 = int(shared_v5)
+    v6 = int(shared_v6)
+
+    st.info(f"ℹ️ 바닥판에서 가져온 코너형 치수 (고정값)")
 
     body_max_width = max((p.w for p in BODY), default=2000)
 
     colA, colB = st.columns(2)
     with colA:
-        v3 = st.number_input("3번 (세면 길이, mm)", 100, 9800, 1000, STEP_MM)
-        v5 = st.number_input("5번 (샤워 길이, mm)", 100, 9800, 900, STEP_MM)
+        st.text_input("3번 (세면 길이, mm)", value=str(v3), disabled=True)
+        st.text_input("5번 (샤워 길이, mm)", value=str(v5), disabled=True)
     with colB:
-        v4 = st.number_input("4번 (오목 폭, mm)", 100, 9800, 600, STEP_MM)
-        v6 = st.number_input("6번 (샤워 폭, mm)", 100, 9800, 900, STEP_MM)
+        st.text_input("4번 (오목 폭, mm)", value=str(v4), disabled=True)
+        st.text_input("6번 (샤워 폭, mm)", value=str(v6), disabled=True)
 
     v1, v2 = v3 + v5, v4 + v6
     st.text_input("1번=L=3+5", value=str(v1), disabled=True)

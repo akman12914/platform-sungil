@@ -419,11 +419,11 @@ if missing_steps:
             )
         elif not has_wall:
             st.page_link(
-                "pages/2_벽판_계산.py", label="🟩 벽판 계산 시작하기", icon=None
+                "pages/2_벽판_규격.py", label="🟩 벽판 계산 시작하기", icon=None
             )
         elif not has_ceil:
             st.page_link(
-                "pages/3_천장판_계산.py", label="🟨 천장판 계산 시작하기", icon=None
+                "pages/5_천장판_계산.py", label="🟨 천장판 계산 시작하기", icon=None
             )
 
     st.stop()  # 이전 단계 미완료 시 이후 UI 차단

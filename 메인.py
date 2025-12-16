@@ -201,7 +201,7 @@ st.markdown(
 st.markdown("### 🔧 계산 도구")
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-# Tiles - Row 1: Calculators (3열 균등)
+# Row 1: 바닥판 / 벽판(3단계) / 천장판
 c1, c2, c3 = st.columns(3, gap="medium")
 
 with c1:
@@ -212,15 +212,91 @@ with c1:
     )
 
 with c2:
-    st.page_link(
-        "pages/2_벽판_계산.py",
-        label="🟩 벽판 계산기\n문/젠다이/분할 규칙 반영",
-        icon=None,
-    )
+    # 벽판 계산 (3단계 파이프라인) - page_link 스타일과 통일
+    st.markdown("""
+    <div class="wall-panel-card">
+        <div class="wall-panel-title">🟩 벽판 계산 (3단계)</div>
+        <div class="wall-panel-desc">규격 → 타일 → 원가 순서로 진행</div>
+        <div class="wall-panel-steps">
+            <a href="/벽판_규격" target="_self" class="step-link">① 규격</a>
+            <span class="step-arrow">→</span>
+            <a href="/타일_개수" target="_self" class="step-link">② 타일</a>
+            <span class="step-arrow">→</span>
+            <a href="/벽판_원가" target="_self" class="step-link">③ 원가</a>
+        </div>
+    </div>
+    <style>
+    .wall-panel-card {
+        border: 1px solid var(--line, #e2e8f0);
+        border-radius: 16px;
+        padding: 20px;
+        background: #fff;
+        box-shadow: 0 2px 8px rgba(0,0,0,.08);
+        transition: all .2s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    .wall-panel-card::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        background: linear-gradient(180deg, #22d3ee, #06b6d4);
+        opacity: 0;
+        transition: opacity 0.2s ease;
+    }
+    .wall-panel-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(0,0,0,.12);
+    }
+    .wall-panel-card:hover::before {
+        opacity: 1;
+    }
+    .wall-panel-title {
+        font-weight: 800;
+        font-size: 1.15rem;
+        color: #0f172a;
+        margin-bottom: 4px;
+        padding-left: 12px;
+    }
+    .wall-panel-desc {
+        font-size: 0.9rem;
+        color: #475569;
+        padding-left: 12px;
+        margin-bottom: 12px;
+    }
+    .wall-panel-steps {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding-left: 12px;
+    }
+    .step-link {
+        background: linear-gradient(180deg, #22d3ee, #06b6d4);
+        color: #001018 !important;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        text-decoration: none;
+        transition: filter 0.15s ease;
+    }
+    .step-link:hover {
+        filter: brightness(1.1);
+        text-decoration: none;
+    }
+    .step-arrow {
+        color: #94a3b8;
+        font-weight: 600;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 with c3:
     st.page_link(
-        "pages/3_천장판_계산.py",
+        "pages/5_천장판_계산.py",
         label="🟨 천장판 최적화\n패턴 전수/최소비용 조합",
         icon=None,
     )
@@ -236,14 +312,14 @@ sp_l, c4, c5, sp_r = st.columns([1, 3, 3, 1], gap="medium")
 
 with c4:
     st.page_link(
-        "pages/4_견적서_생성.py",
+        "pages/6_견적서_생성.py",
         label="📋 견적서 생성\n바닥/벽/천장 결과 종합",
         icon=None,
     )
 
 with c5:
     st.page_link(
-        "pages/5_chatbot.py",
+        "pages/7_chatbot.py",
         label="💬 시방서 Q&A\nAI 챗봇 (PDF 검색)",
         icon=None,
     )

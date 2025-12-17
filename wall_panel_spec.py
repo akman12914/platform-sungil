@@ -56,6 +56,11 @@ SHARED_WALL_TILE_TYPE_KEY = "shared_wall_tile_type"  # "300x600" 등
 SHARED_WALL_HEIGHT_KEY = "shared_wall_height"  # 벽 높이
 SHARED_FLOOR_TYPE_KEY = "shared_floor_type"  # PVE/기타
 
+# 젠다이 정보 공유 키 (벽판 원가 페이지로 전달)
+SHARED_JENDAI_ENABLED_KEY = "shared_jendai_enabled"
+SHARED_JENDAI_STEP_KEY = "shared_jendai_step"  # 단차 여부
+SHARED_JENDAI_HEIGHT_KEY = "shared_jendai_height"  # 젠다이 높이 (mm)
+
 # =========================================================
 # 공통 유틸
 # =========================================================
@@ -590,7 +595,25 @@ with st.sidebar:
     floor_type = "PVE" if floor_usage == "PVE" else "그외(GRP/FRP)"
     st.text_input("바닥판 유형 (바닥판 기준)", value=floor_type, disabled=True)
 
-    tile = st.selectbox("벽타일 규격", ["300×600", "250×400"])
+    # 타일 선택 selectbox 검은색 텍스트 - CSS 변수 재정의
+    st.markdown("""
+    <style>
+    div[data-testid="stSelectbox"] {
+        --sb-muted: #000000;
+    }
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
+        color: #000000 !important;
+        -webkit-text-fill-color: #000000 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    tile = st.selectbox("벽타일 규격", ["300×600", "250×400", "600×300"])
+    # 바닥타일 자동 매핑 (검은색 강조)
+    if tile in ["300×600", "600×300"]:
+        floor_tile_display = "300×300"
+    else:
+        floor_tile_display = "200×200"
+    st.markdown(f"<span style='color: black; font-weight: bold;'>→ 바닥타일: {floor_tile_display}</span>", unsafe_allow_html=True)
     H_eff = effective_height(H, floor_type)
 
     st.divider()
@@ -711,6 +734,10 @@ if shape == "사각형":
                 st.session_state[SHARED_WALL_TILE_TYPE_KEY] = tile.replace("×", "x")
                 st.session_state[SHARED_WALL_HEIGHT_KEY] = H
                 st.session_state[SHARED_FLOOR_TYPE_KEY] = floor_type
+                # 젠다이 정보 저장 (벽판 원가 페이지로 전달)
+                st.session_state[SHARED_JENDAI_ENABLED_KEY] = j_enabled
+                st.session_state[SHARED_JENDAI_STEP_KEY] = j_has_step
+                st.session_state[SHARED_JENDAI_HEIGHT_KEY] = int(j_h) if j_enabled else 0
                 st.session_state[WALL_SPEC_DONE_KEY] = True
 
                 st.success(f"벽판 {len(df)}장의 치수가 저장되었습니다. **타일 개수 계산** 페이지로 이동하세요.")
@@ -809,6 +836,10 @@ else:
                 st.session_state[SHARED_WALL_TILE_TYPE_KEY] = tile.replace("×", "x")
                 st.session_state[SHARED_WALL_HEIGHT_KEY] = H
                 st.session_state[SHARED_FLOOR_TYPE_KEY] = floor_type
+                # 젠다이 정보 저장 (벽판 원가 페이지로 전달)
+                st.session_state[SHARED_JENDAI_ENABLED_KEY] = j_enabled
+                st.session_state[SHARED_JENDAI_STEP_KEY] = j_has_step
+                st.session_state[SHARED_JENDAI_HEIGHT_KEY] = int(j_h) if j_enabled else 0
                 st.session_state[WALL_SPEC_DONE_KEY] = True
 
                 st.success(f"벽판 {len(df)}장의 치수가 저장되었습니다. **타일 개수 계산** 페이지로 이동하세요.")

@@ -10,6 +10,8 @@ from typing import List, Optional, Tuple
 
 import streamlit as st
 import pandas as pd
+from PIL import Image, ImageDraw, ImageFont
+import os
 
 # --- Common Styles ---
 from common_styles import apply_common_styles, set_page_config
@@ -203,6 +205,90 @@ def compute_rect_tiles(L: int, W: int, tile_h: int, tile_w: int, area_name: str,
         total_tiles=total_tiles
     )
 
+# =========================================================
+# Drawing (generic grid) - tile.py에서 가져옴
+# =========================================================
+def _get_font(size: int = 12):
+    """한글 폰트 로드"""
+    font_paths = [
+        os.path.join(os.path.dirname(__file__), "NanumGothic.ttf"),
+        "NanumGothic.ttf",
+        "C:/Windows/Fonts/malgun.ttf",
+        "C:/Windows/Fonts/gulim.ttc",
+    ]
+    for fp in font_paths:
+        try:
+            return ImageFont.truetype(fp, size)
+        except (OSError, IOError):
+            continue
+    return ImageFont.load_default()
+
+
+def draw_grid_rect(title: str, L: int, W: int, tile_h: int, tile_w: int, scale: float) -> Image.Image:
+    """
+    Draw rectangle with tile grid + leftover highlight.
+    Coordinate:
+      x axis: width W
+      y axis: length/height L
+    """
+    pad = 18
+    img_w = int(W * scale) + pad * 2
+    img_h = int(L * scale) + pad * 2
+
+    im = Image.new("RGB", (max(1, img_w), max(1, img_h)), "white")
+    d = ImageDraw.Draw(im)
+
+    x0, y0 = pad, pad
+    x1, y1 = pad + int(W * scale), pad + int(L * scale)
+
+    d.rectangle([x0, y0, x1, y1], outline=(0, 0, 0), width=2)
+
+    n_w = W // tile_w
+    r_w = W % tile_w
+    n_h = L // tile_h
+    r_h = L % tile_h
+
+    # grid
+    for k in range(1, n_w + 1):
+        x = x0 + int(k * tile_w * scale)
+        if x < x1:
+            d.line([x, y0, x, y1], fill=(160, 160, 160), width=1)
+
+    for k in range(1, n_h + 1):
+        y = y0 + int(k * tile_h * scale)
+        if y < y1:
+            d.line([x0, y, x1, y], fill=(160, 160, 160), width=1)
+
+    # highlight leftovers
+    if r_w > 0:
+        xs = x0 + int(n_w * tile_w * scale)
+        d.rectangle([xs, y0, x1, y1], fill=(245, 245, 255), outline=None)
+
+    if r_h > 0:
+        ys = y0 + int(n_h * tile_h * scale)
+        d.rectangle([x0, ys, x1, y1], fill=(255, 245, 245), outline=None)
+
+    if r_w > 0 and r_h > 0:
+        xs = x0 + int(n_w * tile_w * scale)
+        ys = y0 + int(n_h * tile_h * scale)
+        d.rectangle([xs, ys, x1, y1], fill=(245, 255, 245), outline=None)
+
+    # redraw outline/grid
+    d.rectangle([x0, y0, x1, y1], outline=(0, 0, 0), width=2)
+    for k in range(1, n_w + 1):
+        x = x0 + int(k * tile_w * scale)
+        if x < x1:
+            d.line([x, y0, x, y1], fill=(160, 160, 160), width=1)
+    for k in range(1, n_h + 1):
+        y = y0 + int(k * tile_h * scale)
+        if y < y1:
+            d.line([x0, y, x1, y], fill=(160, 160, 160), width=1)
+
+    font = _get_font(12)
+    d.text((pad, 4), title, fill=(0, 0, 0), font=font)
+    return im
+
+
 def calculate_tiles(
     wall_panels: List[Tuple[int, int]],
     sink_dimensions: Optional[Tuple[int, int]] = None,
@@ -301,7 +387,7 @@ if not wall_spec_done:
 
 # 데이터 가져오기
 wall_panels = st.session_state.get(SHARED_WALL_PANELS_KEY, [])
-wall_tile_type = st.session_state.get(SHARED_WALL_TILE_TYPE_KEY, "300x600")
+saved_wall_tile_type = st.session_state.get(SHARED_WALL_TILE_TYPE_KEY, "300x600")
 
 floor_result = st.session_state.get(FLOOR_RESULT_KEY, {})
 floor_inputs = floor_result.get("inputs", {})
@@ -318,11 +404,23 @@ floor_shl = floor_inputs.get("shl", 800)
 
 # 사이드바
 with st.sidebar:
-    st.header("입력 데이터 확인")
+    st.header("타일 설정")
+
+    # 벽타일 규격 (벽판 규격에서 받아온 값 고정 표시)
+    wall_tile_type = saved_wall_tile_type
+    st.text_input("벽타일 규격", value=wall_tile_type, disabled=True)
+
+    # 바닥타일 자동 매핑 표시 (검은색 강조)
+    if wall_tile_type in ["300x600", "600x300"]:
+        floor_tile_display = "300x300"
+    else:
+        floor_tile_display = "200x200"
+    st.markdown(f"<span style='color: black; font-weight: bold;'>→ 바닥타일: {floor_tile_display}</span>", unsafe_allow_html=True)
+
+    st.divider()
 
     st.subheader("벽판 정보")
     st.metric("벽판 개수", f"{len(wall_panels)} 장")
-    st.metric("벽타일 규격", wall_tile_type)
 
     st.divider()
 
@@ -336,7 +434,7 @@ with st.sidebar:
         st.metric("바닥 치수", f"{floor_L} × {floor_W} mm")
 
     st.divider()
-    calc_btn = st.button("타일 개수 계산", type="primary")
+    calc_btn = st.button("타일 개수 계산", type="primary", use_container_width=True)
 
 # 메인 영역
 st.subheader("벽판 치수 리스트")
@@ -500,3 +598,80 @@ if calc_btn:
     st.session_state[TILE_CALC_DONE_KEY] = True
 
     st.success("타일 개수 계산이 완료되었습니다. **벽판 원가** 페이지로 이동하세요.")
+
+    # =========================================================
+    # 격자 시각화 (tile.py에서 가져옴)
+    # =========================================================
+    st.divider()
+    st.subheader("격자 시각화")
+
+    # 스케일 계산 (tile1.py와 동일하게 800 기준)
+    max_wall_W = max(W for W, H in wall_panels) if wall_panels else 1
+    max_wall_H = max(H for W, H in wall_panels) if wall_panels else 1
+    wall_scale = 800 / max(max_wall_W, max_wall_H)
+
+    # 바닥 스케일
+    if has_split and sink_dims and shower_dims:
+        max_floor_dim = max(sink_dims[0], sink_dims[1], shower_dims[0], shower_dims[1])
+    elif sink_dims:
+        max_floor_dim = max(sink_dims[0], sink_dims[1])
+    else:
+        max_floor_dim = 1
+    floor_scale = 800 / max_floor_dim
+
+    tab1, tab2 = st.tabs(["벽판(벽타일)", "바닥판(바닥타일)"])
+
+    with tab1:
+        cols = st.columns(2)
+        for i, (W, H) in enumerate(wall_panels):
+            try:
+                pr = compute_wall_panel(W, H, tile_h=wall_tile_h, tile_w=wall_tile_w)
+                title = f"#{i+1}  {W}x{H}mm  (tile {wall_tile_h}x{wall_tile_w})"
+                im = draw_grid_rect(title, L=H, W=W, tile_h=wall_tile_h, tile_w=wall_tile_w, scale=wall_scale)
+                col_idx = i % 2
+                with cols[col_idx]:
+                    st.image(im, use_container_width=False)
+                    st.caption(
+                        f"온타일 {pr.full_tiles} | 큰조각 {pr.large_pieces} | 작은조각 {pr.small_pieces} | "
+                        f"조각환산 {pr.piece_tiles_equiv} | 총 {pr.total_tiles}"
+                    )
+            except ValueError:
+                pass
+
+    with tab2:
+        cols = st.columns(2)
+        if has_split:
+            # 세면부
+            if sink_dims:
+                try:
+                    fr = compute_rect_tiles(sink_dims[0], sink_dims[1], floor_tile_h, floor_tile_w, "세면부", floor_tile_name)
+                    title = f"세면부 {sink_dims[0]}x{sink_dims[1]}mm  (tile {floor_tile_h}x{floor_tile_w})"
+                    im = draw_grid_rect(title, L=sink_dims[0], W=sink_dims[1], tile_h=floor_tile_h, tile_w=floor_tile_w, scale=floor_scale)
+                    with cols[0]:
+                        st.image(im, use_container_width=False)
+                        st.caption(f"[세면부] 온타일 {fr.full_tiles} | 큰조각 {fr.large_pieces} | 작은조각 {fr.small_pieces} | 총 {fr.total_tiles}")
+                except ValueError:
+                    pass
+            # 샤워부
+            if shower_dims:
+                try:
+                    fr = compute_rect_tiles(shower_dims[0], shower_dims[1], floor_tile_h, floor_tile_w, "샤워부", floor_tile_name)
+                    title = f"샤워부 {shower_dims[0]}x{shower_dims[1]}mm  (tile {floor_tile_h}x{floor_tile_w})"
+                    im = draw_grid_rect(title, L=shower_dims[0], W=shower_dims[1], tile_h=floor_tile_h, tile_w=floor_tile_w, scale=floor_scale)
+                    with cols[1]:
+                        st.image(im, use_container_width=False)
+                        st.caption(f"[샤워부] 온타일 {fr.full_tiles} | 큰조각 {fr.large_pieces} | 작은조각 {fr.small_pieces} | 총 {fr.total_tiles}")
+                except ValueError:
+                    pass
+        else:
+            # 바닥 전체
+            if sink_dims:
+                try:
+                    fr = compute_rect_tiles(sink_dims[0], sink_dims[1], floor_tile_h, floor_tile_w, "바닥", floor_tile_name)
+                    title = f"바닥 {sink_dims[0]}x{sink_dims[1]}mm  (tile {floor_tile_h}x{floor_tile_w})"
+                    im = draw_grid_rect(title, L=sink_dims[0], W=sink_dims[1], tile_h=floor_tile_h, tile_w=floor_tile_w, scale=floor_scale)
+                    with cols[0]:
+                        st.image(im, use_container_width=False)
+                        st.caption(f"[바닥] 온타일 {fr.full_tiles} | 큰조각 {fr.large_pieces} | 작은조각 {fr.small_pieces} | 총 {fr.total_tiles}")
+                except ValueError:
+                    pass

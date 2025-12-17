@@ -37,6 +37,9 @@ SHARED_BATH_SHAPE_KEY = "shared_bath_shape"
 WALL_SPEC_DONE_KEY = "wall_spec_done"
 SHARED_WALL_PANELS_KEY = "shared_wall_panels"  # [(W,H), ...] 벽판 치수 리스트
 SHARED_WALL_HEIGHT_KEY = "shared_wall_height"  # 벽 높이
+SHARED_JENDAI_ENABLED_KEY = "shared_jendai_enabled"
+SHARED_JENDAI_STEP_KEY = "shared_jendai_step"  # 단차 여부
+SHARED_JENDAI_HEIGHT_KEY = "shared_jendai_height"  # 젠다이 높이 (mm)
 
 # 타일 개수에서 받아오는 키
 TILE_CALC_DONE_KEY = "tile_calc_done"
@@ -339,20 +342,23 @@ with st.sidebar:
 
     st.divider()
 
-    # 욕실 형태 (세션에서 자동 로드)
-    bath_type = st.radio(
-        "욕실형태유형",
-        ["사각형", "코너형"],
-        index=0 if bath_shape == "사각형" else 1,
-        horizontal=True
-    )
+    # 욕실 형태 (바닥판에서 받아온 값 고정 표시)
+    st.subheader("욕실형태유형")
+    st.text_input("욕실 형태", value=bath_shape, disabled=True)
+    bath_type = bath_shape  # 바닥판에서 받아온 값 그대로 사용
 
-    # 젠다이 설정
-    zendae_step = st.radio("젠다이 단차여부", ["없음", "있음"], horizontal=True) == "있음"
+    # 젠다이 설정 (벽판 규격에서 받아온 값 고정 표시)
+    st.subheader("젠다이 설정")
+    saved_jendai_enabled = st.session_state.get(SHARED_JENDAI_ENABLED_KEY, False)
+    saved_jendai_step = st.session_state.get(SHARED_JENDAI_STEP_KEY, False)
+    saved_jendai_height = st.session_state.get(SHARED_JENDAI_HEIGHT_KEY, 0)
 
-    zendae_h_mm = 0.0
+    zendae_step = saved_jendai_step
+    zendae_h_mm = float(saved_jendai_height) if saved_jendai_step else 0.0
+
+    st.text_input("젠다이 단차여부", value="있음" if zendae_step else "없음", disabled=True)
     if zendae_step:
-        zendae_h_mm = st.number_input("젠다이 높이 (mm)", min_value=50, max_value=1000, value=200, step=10)
+        st.text_input("젠다이 높이 (mm)", value=str(int(zendae_h_mm)), disabled=True)
 
     st.divider()
 
@@ -455,3 +461,146 @@ with st.expander("입력 패널(정리된 리스트)"):
 
 # 완료 메시지
 st.success("벽판 원가 계산이 완료되었습니다. 견적서 생성 페이지에서 결과를 확인하세요.")
+
+# =========================================
+# 계산 과정 상세 (테스트 UI)
+# =========================================
+st.divider()
+with st.expander("🔍 계산 과정 상세 보기 (테스트)", expanded=False):
+    st.markdown("### 1. 입력값 확인")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("**기본 정보**")
+        st.write(f"- 욕실 형태: `{bath_type}`")
+        st.write(f"- 프레임 각도: `{angle}각`")
+        st.write(f"- 젠다이 단차: `{'있음' if zendae_step else '없음'}`")
+        if zendae_step:
+            st.write(f"- 젠다이 높이: `{zendae_h_mm}mm`")
+        st.write(f"- 벽 높이: `{wall_height}mm`")
+    with col2:
+        st.markdown("**패널 정보**")
+        st.write(f"- 총 패널 수: `{summary['총판넬수']:.0f}장`")
+        st.write(f"- 총 면적: `{summary['총면적(㎡)']:.4f}㎡`")
+        st.write(f"- 평균 면적: `{summary['평균면적(㎡/장)']:.4f}㎡/장`")
+        st.write(f"- 타일 개수/패널: `{tiles_per_panel:.1f}장`")
+    with col3:
+        st.markdown("**엑셀 상수**")
+        st.write(f"- 프레임단가({angle}각): `{consts.frame_unit_price:,.0f}원/m`")
+        st.write(f"- P/U단가({angle}각): `{consts.pu_unit_price:,.0f}원/㎡`")
+        st.write(f"- 조립클립단가: `{consts.clip_unit_price:,.0f}원/세트`")
+        st.write(f"- Loss율: `{consts.loss_rate:.3f}`")
+
+    st.markdown("---")
+    st.markdown("### 2. 프레임 길이 계산")
+
+    st.markdown("**Step 2-1: 기본 프레임 총길이**")
+    st.code(f"""
+각 패널의 둘레 = 2 × (패널폭 + 패널높이)
+기본프레임 총길이 = Σ(패널둘레 × 수량)
+                 = {summary['기본프레임총길이(m)']:.4f} m
+""")
+
+    st.markdown("**Step 2-2: 추가 프레임 길이 (욕실형태/젠다이에 따라)**")
+    if bath_type == "사각형" and not zendae_step:
+        add_formula = "사각형 + 젠다이 없음 → 추가 길이 = 0"
+    elif bath_type == "사각형" and zendae_step:
+        add_formula = f"사각형 + 젠다이 있음 → 추가 길이 = 2 × 젠다이높이 = 2 × {zendae_h_mm/1000:.3f}m"
+    elif bath_type == "코너형" and not zendae_step:
+        add_formula = f"코너형 + 젠다이 없음 → 추가 길이 = 벽높이 = {wall_height/1000:.3f}m"
+    else:
+        add_formula = f"코너형 + 젠다이 있음 → 추가 길이 = 젠다이높이 + 벽높이 = {zendae_h_mm/1000:.3f} + {wall_height/1000:.3f}m"
+
+    st.code(f"""
+{add_formula}
+추가프레임 길이 = {summary['추가프레임길이(m)']:.4f} m
+""")
+
+    st.markdown("**Step 2-3: Loss 적용 및 평균 계산**")
+    st.code(f"""
+프레임 총길이 = 기본프레임 + 추가프레임
+             = {summary['기본프레임총길이(m)']:.4f} + {summary['추가프레임길이(m)']:.4f}
+             = {summary['기본프레임총길이(m)'] + summary['추가프레임길이(m)']:.4f} m
+
+Loss 적용 프레임 총길이 = 프레임 총길이 × Loss율
+                      = {summary['기본프레임총길이(m)'] + summary['추가프레임길이(m)']:.4f} × {consts.loss_rate:.3f}
+                      = {summary['Loss적용프레임총길이(m)']:.4f} m
+
+후레임 평균(m/장) = Loss적용 프레임 총길이 / 총 패널수
+                 = {summary['Loss적용프레임총길이(m)']:.4f} / {summary['총판넬수']:.0f}
+                 = {summary['후레임평균(m/장,Loss)']:.4f} m/장
+""")
+
+    st.markdown("---")
+    st.markdown("### 3. 재료비(M) 계산")
+
+    frame_cost = summary['후레임평균(m/장,Loss)'] * consts.frame_unit_price
+    pu_cost = summary['평균면적(㎡/장)'] * consts.pu_unit_price
+    clip_cost = consts.clip_unit_price
+    material_M = frame_cost + pu_cost + clip_cost
+
+    st.code(f"""
+프레임비 = 후레임평균 × 프레임단가
+        = {summary['후레임평균(m/장,Loss)']:.4f} m × {consts.frame_unit_price:,.0f} 원/m
+        = {frame_cost:,.0f} 원/장
+
+P/U비 = 평균면적 × P/U단가
+      = {summary['평균면적(㎡/장)']:.4f} ㎡ × {consts.pu_unit_price:,.0f} 원/㎡
+      = {pu_cost:,.0f} 원/장
+
+조립클립비 = {clip_cost:,.0f} 원/장 (고정)
+
+재료비(M) 합계 = 프레임비 + P/U비 + 조립클립비
+              = {frame_cost:,.0f} + {pu_cost:,.0f} + {clip_cost:,.0f}
+              = {material_M:,.0f} 원/장
+""")
+
+    st.markdown("---")
+    st.markdown("### 4. 생산인건비(P) 계산")
+
+    st.code(f"""
+평균면적 = {summary['평균면적(㎡/장)']:.4f} ㎡
+
+생산량 기준 (평균면적 기준):
+  - ≤ 1.5㎡  → {consts.prod_qty_le_1_5}장/일
+  - 1.51~1.89㎡ → {consts.prod_qty_1_51_1_89}장/일
+  - ≥ 1.9㎡  → {consts.prod_qty_ge_1_9}장/일
+
+적용 생산량 = {summary['생산량(기준)']:.0f}장/일
+
+판넬 1장당 가공 세트수 = 생산량 / 총판넬수
+                      = {summary['생산량(기준)']:.0f} / {summary['총판넬수']:.0f}
+                      = {summary['판넬1장당_평균가공세트수']:.4f}
+
+생산인건비(P) = 생산인건비_일단가 / 판넬1장당 가공세트수
+             = {consts.labor_cost_per_day:,.0f} / {summary['판넬1장당_평균가공세트수']:.4f}
+             = {summary['판넬1장당_생산인건비(P)']:,.0f} 원/장
+""")
+
+    st.markdown("---")
+    st.markdown("### 5. 기타 비용")
+
+    tile_Y = tiles_per_panel * consts.tile_mgmt_unit_price
+
+    st.code(f"""
+설비감가비(S) = {consts.equip_depr_unit:,.0f} 원/장 (고정)
+제조경비(V)  = {consts.manuf_overhead_unit:,.0f} 원/장 (고정)
+
+타일관리비(Y) = 타일개수/패널 × 타일관리비 단가
+             = {tiles_per_panel:.1f}장 × {consts.tile_mgmt_unit_price:,.0f} 원/장
+             = {tile_Y:,.0f} 원/장
+
+출고·렉입고비(AB) = {consts.ship_rack_unit:,.0f} 원/장 (고정)
+""")
+
+    st.markdown("---")
+    st.markdown("### 6. 최종 원가 계산")
+
+    st.code(f"""
+생산원가계(AD) = 재료비(M) + 생산인건비(P) + 설비감가비(S) + 제조경비(V) + 타일관리비(Y) + 출고·렉입고비(AB)
+             = {material_M:,.0f} + {summary['판넬1장당_생산인건비(P)']:,.0f} + {consts.equip_depr_unit:,.0f} + {consts.manuf_overhead_unit:,.0f} + {tile_Y:,.0f} + {consts.ship_rack_unit:,.0f}
+             = {summary['판넬1장당_생산원가계(AD)']:,.0f} 원/장
+
+욕실 1세트 생산원가계 = 판넬1장당 생산원가계 × 총판넬수
+                     = {summary['판넬1장당_생산원가계(AD)']:,.0f} × {summary['총판넬수']:.0f}
+                     = {summary['욕실1세트_생산원가계(AD)']:,.0f} 원
+""")

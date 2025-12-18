@@ -235,23 +235,41 @@ def convert_floor_data(floor_result: dict) -> dict:
 
 def convert_wall_data(wall_result: dict) -> dict:
     """Convert wall_result to quotation format"""
+    # 벽판 원가 계산 결과 확인 (wall_panel_cost_final.py의 결과)
+    wall_cost_result = st.session_state.get("shared_wall_cost_result", {})
+
+    if wall_cost_result:
+        # 벽판 원가 계산 결과가 있으면 해당 값 사용
+        total_panels = int(wall_cost_result.get("총판넬수", 0))
+        unit_price = wall_cost_result.get("판넬1장당_생산원가계(AD)", 0)
+        production_cost = wall_cost_result.get("욕실1세트_생산원가계(AD)", 0)
+        # 벽타일 정보는 wall_result에서 가져오거나 기본값 사용
+        tile = "300×600"
+        if wall_result:
+            inputs = wall_result.get("inputs", {})
+            tile = inputs.get("tile", "300×600")
+        return {
+            "총개수": total_panels,
+            "단가": unit_price,
+            "벽타일": tile,
+            "production_cost": production_cost,
+        }
+
+    # wall_cost_result가 없으면 기존 방식: wall_panel_final.py의 결과 사용
     if not wall_result:
         return {}
 
     result = wall_result.get("result", {})
     inputs = wall_result.get("inputs", {})
-
-    # 벽판 1장당 생산원가 사용 (ad_per_panel)
     unit_price = result.get("ad_per_panel", 0)
-
-    # wall_panel_final.py는 "total_panels" 키를 사용
     total_panels = int(result.get("total_panels", 0))
+    production_cost = result.get("production_cost", 0)
 
     return {
         "총개수": total_panels,
         "단가": unit_price,
         "벽타일": inputs.get("tile", "300×600"),
-        "production_cost": result.get("production_cost", 0),
+        "production_cost": production_cost,
     }
 
 
@@ -335,8 +353,13 @@ floor_result = st.session_state.get(FLOOR_RESULT_KEY)
 wall_result = st.session_state.get(WALL_RESULT_KEY)
 ceil_result = st.session_state.get(CEIL_RESULT_KEY)
 
+# 벽판 원가 계산 완료 여부 확인 (wall_panel_cost_final.py)
+wall_cost_done = st.session_state.get("wall_cost_done", False)
+wall_cost_result = st.session_state.get("shared_wall_cost_result", {})
+
 has_floor = bool(floor_result)
-has_wall = bool(wall_result)
+# 벽판: wall_result가 있거나, 벽판 원가 계산이 완료되었으면 OK
+has_wall = bool(wall_result) or (wall_cost_done and bool(wall_cost_result))
 has_ceil = bool(ceil_result)
 
 # Status display
@@ -474,6 +497,7 @@ AUTO_FLOOR_TYPE_KEY = "auto_floor_type"
 AUTO_SHAPE_TYPE_KEY = "auto_shape_type"
 SELECT_ITEMS_KEY = "select_items"
 OPTIONAL_ITEMS_KEY = "optional_items"
+CUSTOM_ITEMS_KEY = "custom_items"  # 사용자 정의 품목
 
 # ═══════════════════════════════════════════════════════════════
 # 【A】 자동지정 품목 (기본 포함, 수량 편집 가능)
@@ -492,6 +516,11 @@ FIXED_QUANTITY_ITEMS = {
     "PVC 4방문틀": 1,
     "ABS 문짝": 1,
     "도어하드웨어": 1,  # 도어락+경첩
+    # 포켓도어 4종
+    "가틀": 0,
+    "본틀": 0,
+    "레일 및 뎀퍼": 0,
+    "오목손잡이 및 문틀받침대": 0,
     # 수전 3종 (세면기수전, 샤워수전, 슬라이드바)
     "세면기 수전": 1,
     "샤워수전": 1,
@@ -502,8 +531,16 @@ FIXED_QUANTITY_ITEMS = {
     "휴지걸이": 1,
     "일자유리선반": 1,
     "코너선반": 1,
-    # 욕실등 내함
-    "욕실등, 콘센트 내함": 1,
+    # 자재 품목 (욕실등)
+    "욕실등": 0,
+    "원형등": 0,
+    "사각등": 0,
+    "원형 매립등": 0,
+    # 가공 품목 (천장판 타공)
+    "천장판 타공": 0,
+    "환풍기 타공": 1,
+    "원형 매립 타공": 0,
+    "사각 매립 타공": 0,
     # 공통자재
     "실리콘(내항균성)": 4.5,
     "실리콘(외장용)": 1,
@@ -823,9 +860,11 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
                         "슬리브용 몰탈막음 스펀지"],
         "도기류": ["양변기"],
         "문세트": ["PVC 4방문틀", "ABS 문짝", "도어하드웨어"],
+        "포켓도어": ["가틀", "본틀", "레일 및 뎀퍼", "오목손잡이 및 문틀받침대"],
         "수전": ["세면기 수전", "샤워수전", "슬라이드바"],
         "액세서리": ["은경(거울)", "수건걸이", "휴지걸이", "일자유리선반", "코너선반"],
-        "욕실등": ["욕실등, 콘센트 내함"],
+        "자재 품목 (욕실등)": ["욕실등", "원형등", "사각등", "원형 매립등"],
+        "가공 품목 (천장판 타공)": ["천장판 타공", "환풍기 타공", "원형 매립 타공", "사각 매립 타공"],
         "공통자재": ["실리콘(내항균성)", "실리콘(외장용)", "우레탄폼",
                     "이면지지클립", "타일 평탄클립", "에폭시 접착제",
                     "코너마감재", "코너비드"],
@@ -859,10 +898,61 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
 
     st.session_state[AUTO_ITEMS_KEY] = edited_items
 
+    # ═══════════════════════════════════════════════════════════════
+    # 사용자 정의 품목 추가
+    # ═══════════════════════════════════════════════════════════════
+    st.divider()
+    st.markdown("### 사용자 정의 품목 추가")
+    st.caption("단가표에 있는 품목을 직접 추가할 수 있습니다.")
+
+    # 사용자 정의 품목 초기화
+    if CUSTOM_ITEMS_KEY not in st.session_state:
+        st.session_state[CUSTOM_ITEMS_KEY] = []
+
+    # 새 품목 추가 폼
+    with st.form("add_custom_item_form", clear_on_submit=True):
+        col_cat, col_name, col_qty = st.columns([1, 2, 1])
+        with col_cat:
+            new_category = st.text_input("대분류", placeholder="예: 액세서리")
+        with col_name:
+            new_item_name = st.text_input("품목명", placeholder="예: 비누받침대")
+        with col_qty:
+            new_qty = st.number_input("수량", min_value=0.0, max_value=100.0, value=1.0, step=0.5)
+
+        add_btn = st.form_submit_button("품목 추가", use_container_width=True)
+        if add_btn and new_item_name.strip():
+            st.session_state[CUSTOM_ITEMS_KEY].append({
+                "category": new_category.strip() or "기타",
+                "name": new_item_name.strip(),
+                "qty": new_qty
+            })
+            st.success(f"'{new_item_name}' 품목이 추가되었습니다.")
+            st.rerun()
+
+    # 추가된 사용자 정의 품목 목록 표시 및 삭제
+    custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
+    if custom_items:
+        st.markdown("**추가된 사용자 정의 품목:**")
+        items_to_remove = []
+        for idx, item in enumerate(custom_items):
+            col_info, col_del = st.columns([4, 1])
+            with col_info:
+                st.text(f"[{item['category']}] {item['name']} - 수량: {item['qty']}")
+            with col_del:
+                if st.button("삭제", key=f"del_custom_{idx}"):
+                    items_to_remove.append(idx)
+
+        # 삭제 처리
+        if items_to_remove:
+            for idx in sorted(items_to_remove, reverse=True):
+                st.session_state[CUSTOM_ITEMS_KEY].pop(idx)
+            st.rerun()
+
 # 최종 자동지정 품목
 final_auto_items = st.session_state.get(AUTO_ITEMS_KEY, current_auto_items)
 final_select_items = st.session_state.get(SELECT_ITEMS_KEY, {})
 final_optional_items = st.session_state.get(OPTIONAL_ITEMS_KEY, {})
+final_custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
 
 # ----------------------------
 # 견적서 생성
@@ -923,11 +1013,14 @@ else:
 
     # 2) 벽판 & 타일
     if wall_data:
-        # PU벽판 - 1개로 표시, 단가는 총 금액
+        # PU벽판 - 1개로 표시, 단가는 총 금액 (벽판 원가 계산 결과 사용)
         wall_spec = "PU벽판"
-        total_qty = float(wall_data.get("총개수", 0))
-        unit_price_per_panel = float(wall_data.get("단가", 0))
-        total_wall_price = total_qty * unit_price_per_panel
+        # production_cost가 있으면 직접 사용, 없으면 계산
+        total_wall_price = float(wall_data.get("production_cost", 0))
+        if total_wall_price == 0:
+            total_qty = float(wall_data.get("총개수", 0))
+            unit_price_per_panel = float(wall_data.get("단가", 0))
+            total_wall_price = total_qty * unit_price_per_panel
         add_row(rows, "벽판", wall_spec, 1, total_wall_price)
 
         # 벽타일 & 바닥타일 규격 연동
@@ -940,20 +1033,20 @@ else:
             wall_tile_spec = "벽타일 300*600"
             floor_tile_spec = "바닥타일 300*300"
 
+        # 타일 개수 계산 결과에서 가져오기 (tile_calculation.py)
+        total_wall_tiles = st.session_state.get("shared_total_wall_tiles", 0)
+        total_floor_tiles = st.session_state.get("shared_total_floor_tiles", 0)
+
         # 벽타일
         rec = find_item(
             price_df, "타일", "PU타일 벽체 타일", spec_contains=wall_tile_spec
         )
+        wall_tile_qty = total_wall_tiles if total_wall_tiles > 0 else (rec.get("수량", 1) if rec else 1)
+        wall_tile_unit_price = rec.get("단가", 0) if rec else 0
         if rec is not None:
-            add_row(
-                rows,
-                "타일",
-                wall_tile_spec,
-                rec.get("수량", 1) or 1,
-                rec.get("단가", 0),
-            )
+            add_row(rows, "타일", wall_tile_spec, wall_tile_qty, wall_tile_unit_price)
         else:
-            add_row(rows, "타일", wall_tile_spec, 1, 0)
+            add_row(rows, "타일", wall_tile_spec, wall_tile_qty, 0)
             warnings.append(f"'{wall_tile_spec}' 단가 미발견 → 0 처리")
 
         # 바닥타일
@@ -962,16 +1055,12 @@ else:
         )
         if rec is None:
             rec = find_item(price_df, "타일", "바닥타일", spec_contains=floor_tile_spec)
+        floor_tile_qty = total_floor_tiles if total_floor_tiles > 0 else (rec.get("수량", 1) if rec else 1)
+        floor_tile_unit_price = rec.get("단가", 0) if rec else 0
         if rec is not None:
-            add_row(
-                rows,
-                "타일",
-                floor_tile_spec,
-                rec.get("수량", 1) or 1,
-                rec.get("단가", 0),
-            )
+            add_row(rows, "타일", floor_tile_spec, floor_tile_qty, floor_tile_unit_price)
         else:
-            add_row(rows, "타일", floor_tile_spec, 1, 0)
+            add_row(rows, "타일", floor_tile_spec, floor_tile_qty, 0)
             warnings.append(f"'{floor_tile_spec}' 단가 미발견 → 0 처리")
 
     # 3) 천장판
@@ -1092,6 +1181,11 @@ else:
         "PVC 4방문틀": ("문세트", "4방"),
         "ABS 문짝": ("문세트", "문짝"),
         "도어하드웨어": ("문세트", "도어락"),  # 도어락+경첩
+        # 포켓도어 4종
+        "가틀": ("포켓도어", "가틀"),
+        "본틀": ("포켓도어", "본틀"),
+        "레일 및 뎀퍼": ("포켓도어", "레일"),
+        "오목손잡이 및 문틀받침대": ("포켓도어", "오목손잡이"),
         # 수전 3종
         "세면기 수전": ("수전", "세면기"),
         "샤워수전": ("수전", "샤워"),
@@ -1102,8 +1196,16 @@ else:
         "휴지걸이": ("액세서리", "휴지걸이"),
         "일자유리선반": ("액세서리", "유리선반"),
         "코너선반": ("액세서리", "코너선반"),
-        # 욕실등
-        "욕실등, 콘센트 내함": ("공통자재", "내함"),
+        # 자재 품목 (욕실등)
+        "욕실등": ("욕실등", "욕실등"),
+        "원형등": ("욕실등", "원형등"),
+        "사각등": ("욕실등", "사각등"),
+        "원형 매립등": ("욕실등", "매립등"),
+        # 가공 품목 (천장판 타공)
+        "천장판 타공": ("가공", "타공"),
+        "환풍기 타공": ("가공", "환풍기"),
+        "원형 매립 타공": ("가공", "원형"),
+        "사각 매립 타공": ("가공", "사각"),
         # 공통자재
         "실리콘(내항균성)": ("공통자재", "내항균"),
         "실리콘(외장용)": ("공통자재", "외장"),
@@ -1156,6 +1258,31 @@ else:
 
         # rows에 추가
         add_row(rows, 품목_cat, item_name, qty, unit_price)
+        added_specs.add(spec_key)
+
+    # 7) 사용자 정의 품목 추가
+    for custom_item in final_custom_items:
+        cat = custom_item.get("category", "기타")
+        name = custom_item.get("name", "")
+        qty = custom_item.get("qty", 0)
+
+        if qty <= 0 or not name:
+            continue
+
+        # 중복 체크
+        spec_key = f"{cat}::{name}"
+        if spec_key in added_specs:
+            continue
+
+        # 단가표에서 찾기
+        rec = find_item(price_df, cat, None, spec_contains=name)
+        if rec is not None:
+            unit_price = rec.get("단가", 0) or 0
+        else:
+            unit_price = 0
+            warnings.append(f"[사용자정의] '{name}' 단가 미발견 → 0 처리")
+
+        add_row(rows, cat, name, qty, unit_price)
         added_specs.add(spec_key)
 
 # ----------------------------

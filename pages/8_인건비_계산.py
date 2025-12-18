@@ -30,6 +30,61 @@ st.title("인건비 계산")
 # ------------------------------
 BUCKETS = ["≤49", "≤99", "≤149", "≤199", "≤299", "≥300"]
 
+# 코너형 규격 그룹 정의 (면적 범위 기준, 엑셀 '설치비 단가 내역(지역) 참고만~~' 시트)
+# 면적 범위로 단가 그룹 매칭
+CORNER_AREA_GROUPS = [
+    {
+        "name": "그룹1",
+        "label": "1520/1521",
+        "area_min": 3.0,
+        "area_max": 3.15,
+        "price_under_300": 350000,
+        "price_over_300": 370000,
+    },
+    {
+        "name": "그룹2",
+        "label": "1522/1523/1621",
+        "area_min": 3.16,
+        "area_max": 3.36,
+        "price_under_300": 360000,
+        "price_over_300": 380000,
+    },
+    {
+        "name": "그룹3",
+        "label": "1524/1622/1623",
+        "area_min": 3.37,
+        "area_max": 3.68,
+        "price_under_300": 370000,
+        "price_over_300": 390000,
+    },
+    {
+        "name": "그룹4",
+        "label": "1624/1525/1722/1723",
+        "area_min": 3.69,
+        "area_max": 3.91,
+        "price_under_300": 400000,
+        "price_over_300": 420000,
+    },
+    {
+        "name": "그룹5",
+        "label": "1825",
+        "area_min": 3.92,
+        "area_max": 4.5,
+        "price_under_300": 420000,
+        "price_over_300": 440000,
+    },
+]
+
+def get_corner_group_by_area(area: float) -> dict:
+    """면적으로 코너형 단가 그룹 찾기"""
+    for group in CORNER_AREA_GROUPS:
+        if group["area_min"] <= area <= group["area_max"]:
+            return group
+    # 범위 밖이면 가장 가까운 그룹 반환
+    if area < CORNER_AREA_GROUPS[0]["area_min"]:
+        return CORNER_AREA_GROUPS[0]
+    return CORNER_AREA_GROUPS[-1]
+
 # ★ 사이드바에서 조절할 옵션 (기본값)
 include_meals = True          # 식대·숙박비 포함 여부
 
@@ -540,15 +595,58 @@ def compute():
     """
     세대당 인건비와 로그, breakdown 반환.
     - 기준설치비 = Base + 형상/세대/재질 보정 + 면적 보정
+    - 코너형의 경우: 규격코드 그룹별 단가 적용
     - 숙식비(세대당) 별도 가산
     - (오지일 경우) 유류비 별도 가산
+    - 기타경비 별도 가산
     - 세부설치비(세대당)는 '참고용'만 표시, 계산에는 미포함
     """
     logs: List[str] = []
 
     # 1) 기준설치비 구성
-    base, base_note = pick_base(material, bucket)
-    logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
+    # 코너형의 경우 면적 기반 단가 그룹 또는 직접 입력 단가 적용
+    corner_spec_adj = 0
+    base_group1 = CORNER_AREA_GROUPS[0]  # 그룹1 (기준)
+    if shape == "코너형":
+        if corner_custom_price > 0:
+            # 단가 직접 입력 모드
+            base, base_note = pick_base(material, bucket)
+            # 직접 입력된 단가와 기본 그룹1의 차이를 보정값으로 적용
+            if units >= 300:
+                base_group1_price = base_group1["price_over_300"]
+            else:
+                base_group1_price = base_group1["price_under_300"]
+            corner_spec_adj = corner_custom_price - base_group1_price
+            logs.append(f"코너형 단가 직접 입력: {fmt_money(corner_custom_price)}")
+            logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
+            logs.append(f"코너형 단가 보정: 그룹1 기준 대비 {fmt_money(corner_spec_adj)}")
+        elif corner_spec_group is not None:
+            # 면적 기반 그룹 매칭 모드
+            group_info = corner_spec_group  # 이미 dict 형태
+            # 300세대 기준으로 단가 결정
+            if units >= 300:
+                corner_base = group_info.get("price_over_300", 0)
+                logs.append(f"코너형 면적그룹: {group_info['name']} ({group_info['label']}) (300세대↑) → 기준단가 {fmt_money(corner_base)}")
+            else:
+                corner_base = group_info.get("price_under_300", 0)
+                logs.append(f"코너형 면적그룹: {group_info['name']} ({group_info['label']}) (300세대↓) → 기준단가 {fmt_money(corner_base)}")
+
+            # 기존 Base와의 차이를 보정값으로 적용
+            base, base_note = pick_base(material, bucket)
+            if units >= 300:
+                base_group1_price = base_group1["price_over_300"]
+            else:
+                base_group1_price = base_group1["price_under_300"]
+            corner_spec_adj = corner_base - base_group1_price
+            logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
+            if corner_spec_adj != 0:
+                logs.append(f"코너형 면적그룹 보정: 그룹1 대비 +{fmt_money(corner_spec_adj)}")
+        else:
+            base, base_note = pick_base(material, bucket)
+            logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
+    else:
+        base, base_note = pick_base(material, bucket)
+        logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
 
     delta_shape = shape_adjust(material, shape, user_type, adjust_tbl)
     logs.append(f"형상/세대/재질 보정: {material}, {shape}, {user_type} → {fmt_money(delta_shape)}")
@@ -556,7 +654,7 @@ def compute():
     d_area = area_adjust(material, area, area_rules)
     logs.append(f"면적 보정: 면적={area:.2f}㎡ → {fmt_money(d_area)}")
 
-    base_install = base + delta_shape + d_area
+    base_install = base + delta_shape + d_area + corner_spec_adj
     logs.append(f"기준설치비 합계(세대당): {fmt_money(base_install)}")
 
     # 2) 숙식비 (기준단가에 포함되지 않음 → 항상 추가)
@@ -569,7 +667,7 @@ def compute():
     )
 
     subtotal = base_install + meals_info
-    logs.append(f"기준단가 합계(세대당, 유류비 제외): {fmt_money(subtotal)}")
+    logs.append(f"기준단가 합계(세대당, 유류비/기타경비 제외): {fmt_money(subtotal)}")
 
     # 3) 제주 예외 처리
     fuel = 0
@@ -577,12 +675,15 @@ def compute():
         logs.append("제주: 별도 산정 (자동 계산 중단)")
         breakdown = {
             "base_raw": base,
+            "corner_spec_adj": corner_spec_adj,
             "shape_adj": delta_shape,
             "area_adj": d_area,
             "base_install": base_install,
             "meals": meals_info,
             "subtotal_ex_fuel": subtotal,
             "fuel": 0,
+            "other_expenses": other_expenses,
+            "other_expenses_note": other_expenses_note,
             "detail_per_unit": 0,
             "final": None,
         }
@@ -595,25 +696,35 @@ def compute():
     else:
         logs.append("유류비 추가비: 미적용 (외곽/오지 아님)")
 
-    # 5) 세부 설치비 (프로젝트 전체 → 세대당 환산) - 참고용만, 계산에는 미포함
+    # 5) 기타경비
+    if other_expenses > 0:
+        note_str = f" ({other_expenses_note})" if other_expenses_note else ""
+        logs.append(f"기타경비(세대당): {fmt_money(other_expenses)}{note_str}")
+    else:
+        logs.append("기타경비: 없음")
+
+    # 6) 세부 설치비 (프로젝트 전체 → 세대당 환산) - 참고용만, 계산에는 미포함
     d_detail, dlogs = detail_cost(material, bucket, detail_catalogs)
     logs.extend(dlogs)
     detail_per_unit = d_detail / max(units, 1)
     logs.append(f"세부설치비(세대당 환산, 참고용/계산 미포함): {fmt_money(detail_per_unit)}")
 
-    # ⚠ 최종 인건비 계산에서 세부설치비는 제외
-    final_price = subtotal + fuel
+    # ⚠ 최종 인건비 계산에서 세부설치비는 제외, 기타경비는 포함
+    final_price = subtotal + fuel + other_expenses
 
     logs.append(f"최종 세대당 인건비(세부설치비 미포함): {fmt_money(final_price)}")
 
     breakdown = {
         "base_raw": base,
+        "corner_spec_adj": corner_spec_adj,
         "shape_adj": delta_shape,
         "area_adj": d_area,
         "base_install": base_install,
         "meals": meals_info,
         "subtotal_ex_fuel": subtotal,
         "fuel": fuel,
+        "other_expenses": other_expenses,
+        "other_expenses_note": other_expenses_note,
         "detail_per_unit": detail_per_unit,  # 참고용
         "final": final_price,
     }
@@ -656,13 +767,147 @@ with st.sidebar:
         index=0,
         horizontal=True,
     )
-
-    # 내부 계산용 코드는 기존처럼 "일반" / "주거약자" 문자열 사용
     user_type = "일반" if user_type_label.startswith("일반") else "주거약자"
-    code = st.text_input("규격 코드 (예: 1520, 1623...)", value="1520")
-    area = st.number_input("면적(㎡)", value=float(parse_code_to_area(code)), help="규격코드에서 자동 계산값. 수동 수정 가능.")
+
+    # ★ 코너형/사각형에 따라 규격코드 입력 방식 분리
+    corner_spec_group = None
+    corner_custom_price = 0
+    corner_total_area = 0.0
+    corner_panel_codes = []  # 바닥판 규격코드 목록
+    corner_panel_areas = []  # 바닥판 면적 목록
+
+    if shape == "코너형":
+        # 코너형: 바닥판 여러 개 규격코드 입력
+        st.markdown("##### 바닥판 규격 입력")
+        st.caption("코너형은 전체 바닥판 면적 합계에 따라 단가가 달라집니다.")
+
+        corner_input_mode = st.radio(
+            "입력 방식",
+            ["규격코드 입력", "단가 직접 입력"],
+            index=0,
+            horizontal=True,
+        )
+
+        if corner_input_mode == "규격코드 입력":
+            # 바닥판 개수 선택
+            if "corner_panel_count" not in st.session_state:
+                st.session_state.corner_panel_count = 2  # 기본 2개
+
+            # 정사각형 버튼 스타일 (특정 버튼에만 적용)
+            st.markdown(
+                """
+                <style>
+                div[data-testid="column"]:has(button[kind="secondary"]) button {
+                    min-width: 36px !important;
+                    max-width: 36px !important;
+                    width: 36px !important;
+                    height: 36px !important;
+                    padding: 0 !important;
+                    font-size: 16px !important;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+
+            col_btn1, col_btn2, col_cnt = st.columns([0.12, 0.12, 0.76])
+            with col_btn1:
+                if st.button("➕", key="add_panel"):
+                    st.session_state.corner_panel_count += 1
+            with col_btn2:
+                if st.button("➖", key="remove_panel"):
+                    if st.session_state.corner_panel_count > 1:
+                        st.session_state.corner_panel_count -= 1
+            with col_cnt:
+                st.markdown(f"<div style='line-height:36px;'>바닥판 {st.session_state.corner_panel_count}개</div>", unsafe_allow_html=True)
+
+            panel_count = st.session_state.corner_panel_count
+
+            # 각 바닥판 규격코드 입력
+            for i in range(panel_count):
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    code_val = st.text_input(
+                        f"바닥판{i+1} 규격코드",
+                        value="1520" if i == 0 else "",
+                        key=f"corner_panel_{i}",
+                        help="예: 1520, 1621 등"
+                    )
+                with col2:
+                    panel_area = parse_code_to_area(code_val) if code_val else 0.0
+                    st.text_input(f"면적", value=f"{panel_area:.2f}㎡", disabled=True, key=f"corner_area_{i}")
+                corner_panel_codes.append(code_val)
+                corner_panel_areas.append(panel_area)
+
+            # 전체 면적 합계
+            corner_total_area = sum(corner_panel_areas)
+            area = corner_total_area  # 면적 보정용
+
+            # 면적 요약 표시
+            st.markdown("---")
+            area_parts = [f"{a:.2f}" for a in corner_panel_areas if a > 0]
+            if len(area_parts) > 1:
+                st.info(f"**전체 면적: {' + '.join(area_parts)} = {corner_total_area:.2f}㎡**")
+            else:
+                st.info(f"**전체 면적: {corner_total_area:.2f}㎡**")
+
+            # 면적으로 단가 그룹 매칭
+            matched_group = get_corner_group_by_area(corner_total_area)
+            corner_spec_group = matched_group
+            st.success(f"매칭 그룹: {matched_group['name']} ({matched_group['label']}) - {matched_group['area_min']}~{matched_group['area_max']}㎡")
+            if units >= 300:
+                st.caption(f"기준단가(300세대↑): {matched_group['price_over_300']:,}원")
+            else:
+                st.caption(f"기준단가(300세대↓): {matched_group['price_under_300']:,}원")
+
+            # 그룹 수동 선택 옵션
+            manual_select = st.checkbox("그룹 수동 선택", value=False)
+            if manual_select:
+                group_options = [f"{g['name']} ({g['label']}) - {g['area_min']}~{g['area_max']}㎡" for g in CORNER_AREA_GROUPS]
+                selected_idx = st.selectbox("단가 그룹", range(len(group_options)), format_func=lambda x: group_options[x])
+                corner_spec_group = CORNER_AREA_GROUPS[selected_idx]
+                if units >= 300:
+                    st.caption(f"선택 기준단가(300세대↑): {corner_spec_group['price_over_300']:,}원")
+                else:
+                    st.caption(f"선택 기준단가(300세대↓): {corner_spec_group['price_under_300']:,}원")
+
+            # 규격코드 변수 설정 (결과 표시용)
+            code = "/".join([c for c in corner_panel_codes if c])
+        else:
+            # 단가 직접 입력
+            corner_custom_price = st.number_input(
+                "코너형 단가 직접 입력 (원)",
+                min_value=0,
+                step=10000,
+                value=350000,
+                help="코너형 기준단가를 직접 입력합니다."
+            )
+            st.info(f"입력된 단가: {corner_custom_price:,}원")
+            # 면적은 수동 입력
+            code = st.text_input("규격 코드 (참고용)", value="1520")
+            area = st.number_input("면적(㎡)", value=float(parse_code_to_area(code)), help="면적 보정에 사용됩니다.")
+    else:
+        # 사각형: 기존 단일 규격코드 입력
+        code = st.text_input("규격 코드 (예: 1520, 1623...)", value="1520")
+        area = st.number_input("면적(㎡)", value=float(parse_code_to_area(code)), help="규격코드에서 자동 계산값. 수동 수정 가능.")
     region = st.selectbox("지역", ["수도권", "지방", "제주"], index=0)
     is_oji = st.checkbox("외곽/오지 지역 여부", value=False, help="강화도/고성/통영/거제/남해/고흥/완도/진도/신안 등")
+
+    # ★ 기타경비 입력
+    st.markdown("---")
+    st.markdown("##### 기타경비")
+    other_expenses = st.number_input(
+        "기타경비 (원/세대)",
+        min_value=0,
+        step=1000,
+        value=0,
+        help="추가로 반영할 기타 경비를 입력하세요. 결과에 포함됩니다."
+    )
+    other_expenses_note = st.text_input(
+        "기타경비 비고",
+        value="",
+        help="기타경비에 대한 설명 (예: 특수장비 대여, 야간작업 수당 등)"
+    )
 
     # ★ 식대·숙박비 포함 여부 (합계(세대) 기준단가)
     include_meals = st.checkbox(
@@ -843,6 +1088,24 @@ with tab6:
             {"항목":"지역", "값": region},
             {"항목":"외곽/오지", "값": "예" if is_oji else "아니오"},
         ]
+        # 코너형인 경우 규격 그룹 또는 직접입력 단가 정보 추가
+        if shape == "코너형":
+            if corner_custom_price > 0:
+                cond_rows.append({"항목":"코너형 단가(직접입력)", "값": f"{corner_custom_price:,}원"})
+            elif corner_spec_group is not None:
+                # 바닥판 상세 정보
+                panel_details = []
+                for i, (c, a) in enumerate(zip(corner_panel_codes, corner_panel_areas)):
+                    if c:
+                        panel_details.append(f"{c}({a:.2f}㎡)")
+                if panel_details:
+                    cond_rows.append({"항목":"코너형 바닥판", "값": " + ".join(panel_details)})
+                cond_rows.append({"항목":"코너형 전체면적", "값": f"{corner_total_area:.2f}㎡"})
+                cond_rows.append({"항목":"코너형 면적그룹", "값": f"{corner_spec_group['name']} ({corner_spec_group['label']})"})
+        # 기타경비 정보 추가
+        if other_expenses > 0:
+            note_str = f" ({other_expenses_note})" if other_expenses_note else ""
+            cond_rows.append({"항목":"기타경비", "값": f"{other_expenses:,}원{note_str}"})
         cond_df = pd.DataFrame(cond_rows)
         st.table(cond_df)
 
@@ -850,21 +1113,32 @@ with tab6:
         st.markdown("### ② 비용 요약 (세대당)")
 
         base_install = breakdown.get("base_install", None)
+        corner_spec_adj = breakdown.get("corner_spec_adj", 0)
         meals_cost = breakdown.get("meals", None)
         fuel_cost = breakdown.get("fuel", None)
         subtotal_ex_fuel = breakdown.get("subtotal_ex_fuel", None)
         detail_per_unit = breakdown.get("detail_per_unit", None)
+        other_exp = breakdown.get("other_expenses", 0)
+        other_exp_note = breakdown.get("other_expenses_note", "")
         final_price = breakdown.get("final", result)
 
         summary_rows = []
+        # 코너형 면적그룹 보정이 있는 경우 비고에 표시
+        base_note = "Base + 형상/세대/재질 보정 + 면적 보정"
+        if corner_spec_adj != 0:
+            base_note += f" + 코너형 면적그룹 보정({fmt_money(corner_spec_adj)})"
         if base_install is not None:
-            summary_rows.append({"항목":"기준설치비", "금액(원)": fmt_money(base_install), "비고":"Base + 형상/세대/재질 보정 + 면적 보정"})
+            summary_rows.append({"항목":"기준설치비", "금액(원)": fmt_money(base_install), "비고": base_note})
         if meals_cost is not None:
             summary_rows.append({"항목":"숙식비", "금액(원)": fmt_money(meals_cost), "비고":"기준단가에 미포함, 별도 가산"})
         if subtotal_ex_fuel is not None:
-            summary_rows.append({"항목":"기준단가 합계", "금액(원)": fmt_money(subtotal_ex_fuel), "비고":"유류비 제외"})
+            summary_rows.append({"항목":"기준단가 합계", "금액(원)": fmt_money(subtotal_ex_fuel), "비고":"유류비/기타경비 제외"})
         if fuel_cost is not None and fuel_cost != 0:
             summary_rows.append({"항목":"유류비 추가비", "금액(원)": fmt_money(fuel_cost), "비고":"외곽/오지일 경우"})
+        # 기타경비 표시
+        if other_exp > 0:
+            other_note = other_exp_note if other_exp_note else "사용자 지정"
+            summary_rows.append({"항목":"기타경비", "금액(원)": fmt_money(other_exp), "비고": other_note})
         # 세부설치비(세대당)는 계산에 포함되지 않으므로 요약 표에서는 제외
         if final_price is not None:
             summary_rows.append({"항목":"최종 세대당 인건비", "금액(원)": fmt_money(final_price), "비고":""})

@@ -21,6 +21,24 @@ CEIL_RESULT_KEY = "ceil_result"
 ERP_MAPPING_KEY = "erp_item_mapping"
 ERP_CODE_DB_KEY = "erp_code_db"
 
+# L/R 구분이 필요한 품목 분류
+LR_REQUIRED_ITEMS = {
+    # 판넬류
+    "바닥판": {"category": "판넬류", "description": "바닥판 (욕조 배수구 위치 기준)"},
+    "벽판": {"category": "판넬류", "description": "벽판"},
+    "천장판": {"category": "판넬류", "description": "천장판"},
+    # 냉온수 배관
+    "독립배관": {"category": "냉온수배관", "description": "독립배관"},
+    "PB세대 세트배관": {"category": "냉온수배관", "description": "PB세대 세트배관"},
+    "세대배관": {"category": "냉온수배관", "description": "세대 배관"},
+    # 오픈수전함 (코너형/사각형 하위에 좌/우 구분)
+    "오픈수전함": {"category": "오픈수전함", "description": "오픈수전함 (코너형/사각형 구분 후 좌/우)", "has_subtype": True},
+    # 욕실 관련
+    "PS욕실장": {"category": "욕실장", "description": "PS욕실장"},
+    "슬라이딩 욕실장": {"category": "욕실장", "description": "슬라이딩 욕실장"},
+    "욕실장": {"category": "욕실장", "description": "욕실장"},
+}
+
 # 파일 경로
 ERP_CODE_FILE = "erp-docs/ERP코드_251113_(GRP바닥판, 내부자재 및 부속품,천장판,타일벽체).xlsx"
 ERP_FORMAT_FILE = "erp-docs/프로젝트 관리(욕실사업)(S)-ERP 양식.xlsx"
@@ -550,9 +568,31 @@ def find_matching_code(
     floor_spec_info: dict = None,
     wall_spec_info: dict = None,
     ceil_spec_info: dict = None,
+    direction_info: dict = None,
 ) -> Dict:
     """
     품목+사양에 대해 ERP 코드 매칭
+
+    Args:
+        품목: 품목명
+        사양: 사양 및 규격
+        existing_codes: 기존 ERP 코드 데이터프레임
+        classification: 코드 분류 체계
+        threshold: 유사도 임계값
+        floor_spec_info: 바닥판 규격 정보
+        wall_spec_info: 벽판 규격 정보
+        ceil_spec_info: 천장판 규격 정보
+        direction_info: 품목별 방향 정보 (L/R)
+            {
+                "바닥판": "L" or "R",
+                "벽판": "L" or "R",
+                "천장판": "L" or "R",
+                "독립배관": "L" or "R",
+                "PB세대배관": "L" or "R",
+                "오픈수전함_형태": "코너형" or "사각형",
+                "오픈수전함": "L" or "R",
+                "욕실장": "L" or "R",
+            }
 
     Returns:
         {
@@ -588,6 +628,39 @@ def find_matching_code(
     품목_clean = str(품목).strip()
     사양_clean = str(사양).strip()
     사양_normalized = normalize_spec(사양_clean)
+
+    # direction_info가 None이면 빈 딕셔너리로 초기화
+    if direction_info is None:
+        direction_info = {}
+
+    # L/R 구분이 필요한 품목인지 확인하고 방향 코드 가져오기
+    def get_item_direction(item_name: str) -> str:
+        """품목명에 해당하는 방향 코드 반환 (L 또는 R)"""
+        if "바닥판" in item_name:
+            return direction_info.get("바닥판", "L")
+        elif "벽판" in item_name or "벽체" in item_name:
+            return direction_info.get("벽판", "L")
+        elif "천장판" in item_name:
+            return direction_info.get("천장판", "L")
+        elif "독립배관" in item_name:
+            return direction_info.get("독립배관", "L")
+        elif "PB세대" in item_name or "세대배관" in item_name:
+            return direction_info.get("PB세대배관", "L")
+        elif "오픈수전함" in item_name or "수전함" in item_name:
+            return direction_info.get("오픈수전함", "L")
+        elif "욕실장" in item_name or "PS욕실장" in item_name or "슬라이딩" in item_name:
+            return direction_info.get("욕실장", "L")
+        return ""
+
+    def filter_by_direction(codes_df: pd.DataFrame, direction_code: str, code_column: str = "생성품목코드") -> pd.DataFrame:
+        """방향 코드(L/R)에 따라 데이터프레임 필터링"""
+        if direction_code and not codes_df.empty:
+            # 코드가 L 또는 R로 끝나는 경우 필터링
+            mask = codes_df[code_column].str.endswith(direction_code, na=False)
+            filtered = codes_df[mask]
+            if not filtered.empty:
+                return filtered
+        return codes_df
 
     # 0. 코드분류(최종)에서 먼저 검색 (신규 추가)
     # ABS문짝, 직관50 등 코드분류에 있는 품목 우선 검색
@@ -894,16 +967,26 @@ def find_matching_code(
                 return result
 
     # 2. 기존 코드에서 완전 일치 검색 (일반)
+    # L/R 방향 코드 가져오기
+    item_direction = get_item_direction(품목_clean)
+
     if not existing_codes.empty and 대분류명:
         # 대분류가 일치하는 항목 필터 (공백 제거 비교)
         matches = existing_codes[existing_codes["대분류"].str.strip() == 대분류명.strip()]
+
+        # L/R 방향이 있으면 해당 방향으로 필터링
+        if item_direction:
+            matches = filter_by_direction(matches, item_direction)
 
         for _, row in matches.iterrows():
             existing_spec = _clean_value(row.get("규격", ""))
             existing_normalized = normalize_spec(existing_spec)
 
-            # 정규화된 규격으로 비교
-            if existing_normalized == 사양_normalized:
+            # 정규화된 규격으로 비교 (좌/우, L/R 제외하고 비교)
+            existing_normalized_no_dir = re.sub(r'[좌우LR]$', '', existing_normalized)
+            사양_normalized_no_dir = re.sub(r'[좌우LR]$', '', 사양_normalized)
+
+            if existing_normalized_no_dir == 사양_normalized_no_dir:
                 result["match_type"] = "exact"
                 result["code"] = _clean_value(row.get("생성품목코드", ""))
                 result["existing_code"] = result["code"]
@@ -923,6 +1006,10 @@ def find_matching_code(
     # 3-1. 먼저 대분류가 일치하는 항목에서 검색
     if not existing_codes.empty and 대분류명:
         matches = existing_codes[existing_codes["대분류"].str.strip() == 대분류명.strip()]
+
+        # L/R 방향이 있으면 해당 방향으로 필터링
+        if item_direction:
+            matches = filter_by_direction(matches, item_direction)
 
         for _, row in matches.iterrows():
             existing_spec = _clean_value(row.get("규격", ""))
@@ -1013,8 +1100,12 @@ def find_matching_code(
             # 규격 코드: 가로 앞2자리 + 세로 앞2자리
             규격코드 = f"{w // 100}{h // 100}"
 
-            # 좌/우 방향 추가
-            if "좌" in 사양_clean or ("L" in 사양_clean.upper() and "LA" not in 사양_clean.upper()):
+            # 좌/우 방향 추가 - direction_info 우선, 없으면 사양에서 추출
+            item_direction = get_item_direction(품목_clean)
+            if item_direction:
+                # direction_info에서 방향 정보가 있으면 사용
+                규격코드 += item_direction
+            elif "좌" in 사양_clean or ("L" in 사양_clean.upper() and "LA" not in 사양_clean.upper()):
                 규격코드 += "L"
             elif "우" in 사양_clean or ("R" in 사양_clean.upper() and "RA" not in 사양_clean.upper()):
                 규격코드 += "R"
@@ -1241,41 +1332,213 @@ with col4:
 
 st.markdown("---")
 
-# 저장된 견적 확인
-saved_quotations = st.session_state.get(SAVED_QUOTATIONS_KEY, [])
+# ============================================
+# 데이터 소스 선택: 엑셀 업로드 (기본) vs 저장된 견적
+# ============================================
+st.subheader("품목 데이터 입력")
 
-if not saved_quotations:
-    st.warning("⚠️ 저장된 견적이 없습니다. 먼저 '견적서 생성' 페이지에서 견적을 저장해주세요.")
+data_source = st.radio(
+    "데이터 소스 선택",
+    options=["엑셀 파일 업로드 (원가내역서)", "저장된 견적 사용"],
+    index=0,
+    horizontal=True,
+    help="원가내역서 엑셀 파일을 업로드하거나, 저장된 견적 데이터를 사용합니다."
+)
 
-    if st.button("견적서 생성 페이지로 이동"):
-        st.switch_page("pages/4_견적서_생성.py")
+# 엑셀에서 읽은 품목 데이터를 저장할 변수
+uploaded_items = []
 
-    st.stop()
+if data_source == "엑셀 파일 업로드 (원가내역서)":
+    st.markdown("""
+    **원가내역서 엑셀 파일**을 업로드해주세요.
+    - 필수 컬럼: `품목`, `사양 및 규격` (또는 `규격`, `사양`)
+    - 선택 컬럼: `수량`, `단가`
+    """)
 
-# 저장된 견적 목록 표시
-st.subheader("저장된 견적 목록")
+    uploaded_file = st.file_uploader(
+        "엑셀 파일 선택 (.xlsx, .xls)",
+        type=["xlsx", "xls"],
+        key="cost_excel_uploader"
+    )
 
-quotation_df = pd.DataFrame([
-    {
-        "번호": i + 1,
-        "타입명": q["name"],
-        "규격": q["spec"],
-        "세대수": q["units"],
-        "품목수": len(q.get("rows", [])),
-        "최종단가": f"{q.get('final_total', q['total']):,.0f}원",
-    }
-    for i, q in enumerate(saved_quotations)
-])
-st.dataframe(quotation_df, use_container_width=True, hide_index=True)
+    if uploaded_file is not None:
+        try:
+            # 엑셀 파일의 시트 목록 확인
+            xl = pd.ExcelFile(uploaded_file)
+            sheet_names = xl.sheet_names
+
+            # 시트 선택
+            if len(sheet_names) > 1:
+                selected_sheet = st.selectbox(
+                    "시트 선택",
+                    options=sheet_names,
+                    index=0
+                )
+            else:
+                selected_sheet = sheet_names[0]
+
+            # 선택된 시트 읽기
+            df_upload = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+
+            # 컬럼명 정규화 (공백 제거)
+            df_upload.columns = [str(col).strip() for col in df_upload.columns]
+
+            st.success(f"✅ 파일 로드 완료: {len(df_upload)}행")
+
+            # Unnamed: 컬럼을 A열, B열 등으로 변환
+            def get_col_letter(idx):
+                """인덱스를 엑셀 열 문자로 변환 (0->A, 1->B, ...)"""
+                result = ""
+                while idx >= 0:
+                    result = chr(idx % 26 + ord('A')) + result
+                    idx = idx // 26 - 1
+                return result
+
+            col_rename_map = {}
+            for i, col in enumerate(df_upload.columns):
+                if str(col).startswith("Unnamed"):
+                    col_rename_map[col] = f"{get_col_letter(i)}열"
+
+            if col_rename_map:
+                df_upload = df_upload.rename(columns=col_rename_map)
+
+            valid_cols = list(df_upload.columns)
+
+            # 컬럼 자동 감지
+            품목_col = None
+            for col in valid_cols:
+                if col in ["품목", "품목명", "항목", "item", "Item"]:
+                    품목_col = col
+                    break
+
+            사양_col = None
+            for col in valid_cols:
+                if col in ["사양 및 규격", "사양및규격", "규격", "사양", "spec", "Spec", "규격 및 사양"]:
+                    사양_col = col
+                    break
+
+            수량_col = None
+            for col in valid_cols:
+                if col in ["수량", "qty", "Qty", "quantity", "Quantity"]:
+                    수량_col = col
+                    break
+
+            단가_col = None
+            for col in valid_cols:
+                if col in ["단가", "price", "Price", "unit_price"]:
+                    단가_col = col
+                    break
+
+            # 자동 감지 결과 표시
+            if 품목_col and 사양_col:
+                st.success(f"✅ 컬럼 자동 감지 완료: 품목=`{품목_col}`, 사양=`{사양_col}`" +
+                          (f", 수량=`{수량_col}`" if 수량_col else "") +
+                          (f", 단가=`{단가_col}`" if 단가_col else ""))
+            else:
+                # 자동 감지 실패 시 수동 선택
+                st.warning("⚠️ 컬럼 자동 감지 실패. 아래에서 직접 선택해주세요.")
+                available_cols = ["(선택 안 함)"] + valid_cols
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    품목_col = st.selectbox("품목 컬럼", options=available_cols, index=0)
+                    if 품목_col == "(선택 안 함)":
+                        품목_col = None
+                with col2:
+                    사양_col = st.selectbox("사양 및 규격 컬럼", options=available_cols, index=0)
+                    if 사양_col == "(선택 안 함)":
+                        사양_col = None
+
+            # 컬럼 미리보기
+            with st.expander("업로드된 데이터 미리보기", expanded=False):
+                st.dataframe(df_upload.head(20), use_container_width=True)
+
+            # 데이터 추출
+            if 품목_col and 사양_col:
+                for _, row in df_upload.iterrows():
+                    품목 = str(row.get(품목_col, "")).strip() if pd.notna(row.get(품목_col)) else ""
+                    사양 = str(row.get(사양_col, "")).strip() if pd.notna(row.get(사양_col)) else ""
+
+                    if not 품목:
+                        continue
+
+                    수량 = 0
+                    if 수량_col and pd.notna(row.get(수량_col)):
+                        try:
+                            수량 = float(row.get(수량_col, 0))
+                        except (ValueError, TypeError):
+                            수량 = 0
+
+                    단가 = 0
+                    if 단가_col and pd.notna(row.get(단가_col)):
+                        try:
+                            단가 = float(row.get(단가_col, 0))
+                        except (ValueError, TypeError):
+                            단가 = 0
+
+                    uploaded_items.append({
+                        "품목": 품목,
+                        "사양 및 규격": 사양,
+                        "수량": 수량,
+                        "단가": 단가,
+                    })
+
+                st.info(f"📋 추출된 품목: **{len(uploaded_items)}개**")
+
+                # 세션에 저장
+                st.session_state["uploaded_cost_items"] = uploaded_items
+            else:
+                st.warning("품목과 사양 및 규격 컬럼을 선택해주세요.")
+
+        except Exception as e:
+            st.error(f"엑셀 파일 읽기 오류: {e}")
+    else:
+        # 이전에 업로드한 데이터가 있으면 사용
+        if "uploaded_cost_items" in st.session_state:
+            uploaded_items = st.session_state["uploaded_cost_items"]
+            st.info(f"📋 이전에 업로드한 품목 데이터 사용: **{len(uploaded_items)}개**")
+
+else:
+    # 저장된 견적 사용
+    saved_quotations = st.session_state.get(SAVED_QUOTATIONS_KEY, [])
+
+    if not saved_quotations:
+        st.warning("⚠️ 저장된 견적이 없습니다. 먼저 '견적서 생성' 페이지에서 견적을 저장하거나, 엑셀 파일을 업로드해주세요.")
+
+        if st.button("견적서 생성 페이지로 이동"):
+            st.switch_page("pages/4_견적서_생성.py")
+
+        st.stop()
+
+    # 저장된 견적 목록 표시
+    st.markdown("**저장된 견적 목록**")
+
+    quotation_df = pd.DataFrame([
+        {
+            "번호": i + 1,
+            "타입명": q["name"],
+            "규격": q["spec"],
+            "세대수": q["units"],
+            "품목수": len(q.get("rows", [])),
+            "최종단가": f"{q.get('final_total', q['total']):,.0f}원",
+        }
+        for i, q in enumerate(saved_quotations)
+    ])
+    st.dataframe(quotation_df, use_container_width=True, hide_index=True)
 
 # 원본 계산 결과에서 규격 정보 추출
 floor_result = st.session_state.get(FLOOR_RESULT_KEY)
 wall_result = st.session_state.get(WALL_RESULT_KEY)
 ceil_result = st.session_state.get(CEIL_RESULT_KEY)
 
-# 바닥판 L/R 방향 선택 (바닥판 계산에서 방향 정보가 없는 경우 사용자가 지정)
+# L/R 방향 선택 (판넬류, 배관류, 욕실장 등)
 st.markdown("---")
-st.subheader("바닥판 방향 설정")
+st.subheader("품목별 방향(L/R) 설정")
+st.markdown("""
+아래 품목들은 **좌/우 구분**이 필요합니다. 각 품목의 방향을 선택해주세요.
+- **L (좌)**: 왼쪽 방향
+- **R (우)**: 오른쪽 방향
+""")
 
 # 바닥판 계산 결과에서 방향 정보 확인
 floor_direction_from_calc = None
@@ -1283,25 +1546,154 @@ if floor_result:
     floor_inputs = floor_result.get("inputs", {})
     floor_direction_from_calc = floor_inputs.get("direction", "")
 
-# 방향이 없거나 미지정인 경우 사용자가 선택
-if not floor_direction_from_calc or floor_direction_from_calc not in ["left", "right", "좌", "우"]:
-    st.info("바닥판 계산 결과에 방향(L/R) 정보가 없습니다. 아래에서 방향을 선택해주세요.")
-    floor_direction_choice = st.radio(
-        "바닥판 방향 선택",
+# 벽판 계산 결과에서 방향 정보 확인
+wall_direction_from_calc = None
+if wall_result:
+    wall_inputs = wall_result.get("inputs", {})
+    wall_direction_from_calc = wall_inputs.get("direction", "")
+
+# 천장판 계산 결과에서 방향 정보 확인
+ceil_direction_from_calc = None
+if ceil_result:
+    ceil_inputs = ceil_result.get("inputs", {})
+    ceil_direction_from_calc = ceil_inputs.get("direction", "")
+
+# ============================================
+# 1. 판넬류 방향 설정
+# ============================================
+st.markdown("#### 1. 판넬류")
+panel_col1, panel_col2, panel_col3 = st.columns(3)
+
+with panel_col1:
+    st.markdown("**바닥판**")
+    if floor_direction_from_calc and floor_direction_from_calc in ["left", "right", "좌", "우"]:
+        dir_display = "좌 (L)" if floor_direction_from_calc in ["left", "좌"] else "우 (R)"
+        st.success(f"계산 결과에서 확인: **{dir_display}**")
+        st.session_state["floor_direction_override"] = "좌" if floor_direction_from_calc in ["left", "좌"] else "우"
+    else:
+        floor_direction_choice = st.radio(
+            "바닥판 방향",
+            options=["좌 (L)", "우 (R)"],
+            index=0,
+            horizontal=True,
+            key="floor_dir_radio",
+            help="욕조 배수구 위치 기준으로 좌/우를 선택합니다."
+        )
+        st.session_state["floor_direction_override"] = "좌" if "좌" in floor_direction_choice else "우"
+
+with panel_col2:
+    st.markdown("**벽판**")
+    if wall_direction_from_calc and wall_direction_from_calc in ["left", "right", "좌", "우"]:
+        dir_display = "좌 (L)" if wall_direction_from_calc in ["left", "좌"] else "우 (R)"
+        st.success(f"계산 결과에서 확인: **{dir_display}**")
+        st.session_state["wall_direction_override"] = "좌" if wall_direction_from_calc in ["left", "좌"] else "우"
+    else:
+        wall_direction_choice = st.radio(
+            "벽판 방향",
+            options=["좌 (L)", "우 (R)"],
+            index=0,
+            horizontal=True,
+            key="wall_dir_radio",
+            help="벽판의 좌/우 방향을 선택합니다."
+        )
+        st.session_state["wall_direction_override"] = "좌" if "좌" in wall_direction_choice else "우"
+
+with panel_col3:
+    st.markdown("**천장판**")
+    if ceil_direction_from_calc and ceil_direction_from_calc in ["left", "right", "좌", "우"]:
+        dir_display = "좌 (L)" if ceil_direction_from_calc in ["left", "좌"] else "우 (R)"
+        st.success(f"계산 결과에서 확인: **{dir_display}**")
+        st.session_state["ceil_direction_override"] = "좌" if ceil_direction_from_calc in ["left", "좌"] else "우"
+    else:
+        ceil_direction_choice = st.radio(
+            "천장판 방향",
+            options=["좌 (L)", "우 (R)"],
+            index=0,
+            horizontal=True,
+            key="ceil_dir_radio",
+            help="천장판의 좌/우 방향을 선택합니다."
+        )
+        st.session_state["ceil_direction_override"] = "좌" if "좌" in ceil_direction_choice else "우"
+
+# ============================================
+# 2. 냉온수 배관 방향 설정
+# ============================================
+st.markdown("#### 2. 냉온수 배관")
+pipe_col1, pipe_col2 = st.columns(2)
+
+with pipe_col1:
+    st.markdown("**독립배관**")
+    indep_pipe_direction = st.radio(
+        "독립배관 방향",
         options=["좌 (L)", "우 (R)"],
-        index=0,  # 기본값: 좌
+        index=0,
         horizontal=True,
-        help="욕조 배수구 위치 기준으로 좌/우를 선택합니다."
+        key="indep_pipe_dir_radio",
+        help="독립배관의 좌/우 방향을 선택합니다."
     )
-    # 선택값을 세션에 저장
-    if "floor_direction_override" not in st.session_state:
-        st.session_state["floor_direction_override"] = "좌"
-    st.session_state["floor_direction_override"] = "좌" if "좌" in floor_direction_choice else "우"
-else:
-    # 이미 방향이 있는 경우 표시만
-    dir_display = "좌 (L)" if floor_direction_from_calc in ["left", "좌"] else "우 (R)"
-    st.success(f"바닥판 계산 결과에서 방향이 확인되었습니다: **{dir_display}**")
-    st.session_state["floor_direction_override"] = "좌" if floor_direction_from_calc in ["left", "좌"] else "우"
+    st.session_state["indep_pipe_direction"] = "좌" if "좌" in indep_pipe_direction else "우"
+
+with pipe_col2:
+    st.markdown("**PB세대 세트배관**")
+    pb_pipe_direction = st.radio(
+        "PB세대 세트배관 방향",
+        options=["좌 (L)", "우 (R)"],
+        index=0,
+        horizontal=True,
+        key="pb_pipe_dir_radio",
+        help="PB세대 세트배관의 좌/우 방향을 선택합니다."
+    )
+    st.session_state["pb_pipe_direction"] = "좌" if "좌" in pb_pipe_direction else "우"
+
+# ============================================
+# 3. 오픈수전함 방향 설정 (코너형/사각형 구분 후 좌/우)
+# ============================================
+st.markdown("#### 3. 오픈수전함")
+st.caption("오픈수전함은 코너형/사각형 구분 후 좌/우를 선택합니다.")
+faucet_col1, faucet_col2 = st.columns(2)
+
+with faucet_col1:
+    faucet_type = st.radio(
+        "오픈수전함 형태",
+        options=["코너형", "사각형"],
+        index=0,
+        horizontal=True,
+        key="faucet_type_radio",
+        help="오픈수전함의 형태를 선택합니다."
+    )
+    st.session_state["faucet_box_type"] = faucet_type
+
+with faucet_col2:
+    faucet_direction = st.radio(
+        "오픈수전함 방향",
+        options=["좌 (L)", "우 (R)"],
+        index=0,
+        horizontal=True,
+        key="faucet_dir_radio",
+        help="오픈수전함의 좌/우 방향을 선택합니다."
+    )
+    st.session_state["faucet_box_direction"] = "좌" if "좌" in faucet_direction else "우"
+
+# ============================================
+# 4. 욕실장 방향 설정
+# ============================================
+st.markdown("#### 4. 욕실 관련")
+bath_col1, bath_col2 = st.columns(2)
+
+with bath_col1:
+    st.markdown("**PS욕실장 / 슬라이딩 욕실장**")
+    bathroom_cabinet_direction = st.radio(
+        "욕실장 방향",
+        options=["좌 (L)", "우 (R)"],
+        index=0,
+        horizontal=True,
+        key="bathroom_cabinet_dir_radio",
+        help="PS욕실장 및 슬라이딩 욕실장의 좌/우 방향을 선택합니다."
+    )
+    st.session_state["bathroom_cabinet_direction"] = "좌" if "좌" in bathroom_cabinet_direction else "우"
+
+with bath_col2:
+    st.markdown(" ")  # 빈 공간
 
 # 전체 품목 추출
 st.markdown("---")
@@ -1309,6 +1701,18 @@ st.subheader("1단계: 전체 품목 추출")
 
 # 사용자 지정 방향 가져오기
 floor_direction_override = st.session_state.get("floor_direction_override", "좌")
+wall_direction_override = st.session_state.get("wall_direction_override", "좌")
+ceil_direction_override = st.session_state.get("ceil_direction_override", "좌")
+indep_pipe_direction = st.session_state.get("indep_pipe_direction", "좌")
+pb_pipe_direction = st.session_state.get("pb_pipe_direction", "좌")
+faucet_box_type = st.session_state.get("faucet_box_type", "코너형")
+faucet_box_direction = st.session_state.get("faucet_box_direction", "좌")
+bathroom_cabinet_direction = st.session_state.get("bathroom_cabinet_direction", "좌")
+
+# 방향 코드 변환 함수
+def get_direction_code(direction_kr: str) -> str:
+    """한글 방향을 코드로 변환 (좌->L, 우->R)"""
+    return "L" if direction_kr == "좌" else "R"
 
 # 원본 계산 결과 표시
 with st.expander("원본 계산 결과 (바닥판/벽판/천장판)", expanded=False):
@@ -1346,46 +1750,61 @@ with st.expander("원본 계산 결과 (바닥판/벽판/천장판)", expanded=F
         else:
             st.info("천장판 계산 결과 없음")
 
-# 모든 견적에서 고유 품목 추출
+# 모든 품목 추출 (엑셀 업로드 또는 저장된 견적에서)
 all_items = {}  # key: (품목, 사양) -> value: {수량 합계, 단가 등}
 
 # 바닥판은 원본 계산 결과에서 규격 정보를 가져옴 (사용자 지정 방향 적용)
 floor_spec_info = extract_floor_erp_spec(floor_result, floor_direction_override) if floor_result else None
 
-for q in saved_quotations:
-    for row in q.get("rows", []):
-        품목 = _clean_value(row.get("품목", "")).strip()
-        사양 = _clean_value(row.get("사양 및 규격", "")).strip()
-        수량 = float(row.get("수량", 0) or 0)
-        단가 = float(row.get("단가", 0) or 0)
+# 데이터 소스에 따라 품목 추출
+if data_source == "엑셀 파일 업로드 (원가내역서)":
+    # 엑셀에서 업로드한 데이터 사용
+    source_items = uploaded_items
+else:
+    # 저장된 견적에서 품목 추출
+    source_items = []
+    saved_quotations = st.session_state.get(SAVED_QUOTATIONS_KEY, [])
+    for q in saved_quotations:
+        for row in q.get("rows", []):
+            source_items.append(row)
 
-        if not 품목:
-            continue
+for row in source_items:
+    품목 = _clean_value(row.get("품목", "")).strip()
+    사양 = _clean_value(row.get("사양 및 규격", "")).strip()
+    수량 = float(row.get("수량", 0) or 0)
+    단가 = float(row.get("단가", 0) or 0)
 
-        # 바닥판인 경우 원본 계산 결과의 규격 사용
-        if 품목 == "바닥판" and floor_spec_info:
-            # 사양이 재질만 있는 경우 (예: "FRP", "GRP") -> 전체 규격으로 교체
-            if 사양 in ["GRP", "FRP", "SMC/FRP", "PP/PE", "PVE", "SMC", "PP", "PE"]:
-                사양 = floor_spec_info["사양"]  # 예: "1500*2200좌"
-                단가 = floor_spec_info["단가"]
+    if not 품목:
+        continue
 
-        key = (품목, 사양)
-        if key not in all_items:
-            all_items[key] = {
-                "품목": 품목,
-                "사양": 사양,
-                "총수량": 0,
-                "단가": 단가,
-            }
-        all_items[key]["총수량"] += 수량
+    # 바닥판인 경우 원본 계산 결과의 규격 사용 (저장된 견적 사용 시)
+    if 품목 == "바닥판" and floor_spec_info and data_source != "엑셀 파일 업로드 (원가내역서)":
+        # 사양이 재질만 있는 경우 (예: "FRP", "GRP") -> 전체 규격으로 교체
+        if 사양 in ["GRP", "FRP", "SMC/FRP", "PP/PE", "PVE", "SMC", "PP", "PE"]:
+            사양 = floor_spec_info["사양"]  # 예: "1500*2200좌"
+            단가 = floor_spec_info["단가"]
+
+    key = (품목, 사양)
+    if key not in all_items:
+        all_items[key] = {
+            "품목": 품목,
+            "사양": 사양,
+            "총수량": 0,
+            "단가": 단가,
+        }
+    all_items[key]["총수량"] += 수량
 
 items_list = list(all_items.values())
 
-st.info(f"총 {len(items_list)}개의 고유 품목이 추출되었습니다.")
-
 if items_list:
+    st.info(f"총 {len(items_list)}개의 고유 품목이 추출되었습니다.")
     items_df = pd.DataFrame(items_list)
     st.dataframe(items_df, use_container_width=True, hide_index=True)
+else:
+    if data_source == "엑셀 파일 업로드 (원가내역서)":
+        st.warning("⚠️ 품목 데이터가 없습니다. 엑셀 파일을 업로드하고 컬럼을 매핑해주세요.")
+    else:
+        st.warning("⚠️ 품목 데이터가 없습니다.")
 
 # 품목코드 매칭
 st.markdown("---")
@@ -1408,6 +1827,18 @@ if st.button("품목코드 매칭 실행", type="primary"):
     # 원본 규격 정보 추출
     wall_spec_info = extract_wall_erp_spec(wall_result) if wall_result else None
 
+    # 방향 정보 구성 (사용자가 선택한 L/R 방향)
+    direction_info = {
+        "바닥판": get_direction_code(floor_direction_override),
+        "벽판": get_direction_code(wall_direction_override),
+        "천장판": get_direction_code(ceil_direction_override),
+        "독립배관": get_direction_code(indep_pipe_direction),
+        "PB세대배관": get_direction_code(pb_pipe_direction),
+        "오픈수전함_형태": faucet_box_type,
+        "오픈수전함": get_direction_code(faucet_box_direction),
+        "욕실장": get_direction_code(bathroom_cabinet_direction),
+    }
+
     for i, item in enumerate(items_list):
         status_text.text(f"처리 중: {item['품목']} - {item['사양']}")
 
@@ -1419,6 +1850,7 @@ if st.button("품목코드 매칭 실행", type="primary"):
             threshold=similarity_threshold,
             floor_spec_info=floor_spec_info,
             wall_spec_info=wall_spec_info,
+            direction_info=direction_info,
         )
 
         result["품목"] = item["품목"]
@@ -1605,7 +2037,7 @@ if matching_results:
                 int(r.get("수량", 1)),  # 수주발생수량
                 r.get("code", ""),  # 생성품목코드
                 r.get("생성품목명", ""),  # 생성품목명
-                "Y" if r.get("match_type") == "exact" else "N",  # 품목생성여부
+                "N" if r.get("match_type") in ["exact", "similar"] else "Y",  # 품목생성여부 (기존코드 있으면 N, 신규면 Y)
                 "Y",  # 공장별품목생성여부
                 r.get("대분류코드", ""),  # 대분류코드
                 r.get("대분류", ""),  # 대분류

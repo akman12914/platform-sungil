@@ -793,49 +793,27 @@ with st.sidebar:
             if "corner_panel_count" not in st.session_state:
                 st.session_state.corner_panel_count = 2  # 기본 2개
 
-            # 정사각형 버튼 스타일 (특정 버튼에만 적용)
-            st.markdown(
-                """
-                <style>
-                div[data-testid="column"]:has(button[kind="secondary"]) button {
-                    min-width: 36px !important;
-                    max-width: 36px !important;
-                    width: 36px !important;
-                    height: 36px !important;
-                    padding: 0 !important;
-                    font-size: 16px !important;
-                }
-                </style>
-                """,
-                unsafe_allow_html=True
+            panel_count = st.number_input(
+                "바닥판 개수",
+                min_value=1,
+                max_value=10,
+                value=st.session_state.corner_panel_count,
+                step=1,
+                key="corner_panel_count_input"
             )
-
-            col_btn1, col_btn2, col_cnt = st.columns([0.12, 0.12, 0.76])
-            with col_btn1:
-                if st.button("➕", key="add_panel"):
-                    st.session_state.corner_panel_count += 1
-            with col_btn2:
-                if st.button("➖", key="remove_panel"):
-                    if st.session_state.corner_panel_count > 1:
-                        st.session_state.corner_panel_count -= 1
-            with col_cnt:
-                st.markdown(f"<div style='line-height:36px;'>바닥판 {st.session_state.corner_panel_count}개</div>", unsafe_allow_html=True)
+            st.session_state.corner_panel_count = panel_count
 
             panel_count = st.session_state.corner_panel_count
 
             # 각 바닥판 규격코드 입력
             for i in range(panel_count):
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    code_val = st.text_input(
-                        f"바닥판{i+1} 규격코드",
-                        value="1520" if i == 0 else "",
-                        key=f"corner_panel_{i}",
-                        help="예: 1520, 1621 등"
-                    )
-                with col2:
-                    panel_area = parse_code_to_area(code_val) if code_val else 0.0
-                    st.text_input(f"면적", value=f"{panel_area:.2f}㎡", disabled=True, key=f"corner_area_{i}")
+                code_val = st.text_input(
+                    f"바닥판{i+1} 규격코드",
+                    value="1520" if i == 0 else "",
+                    key=f"corner_panel_{i}",
+                    help="예: 1520, 1621 등"
+                )
+                panel_area = parse_code_to_area(code_val) if code_val else 0.0
                 corner_panel_codes.append(code_val)
                 corner_panel_areas.append(panel_area)
 
@@ -844,7 +822,6 @@ with st.sidebar:
             area = corner_total_area  # 면적 보정용
 
             # 면적 요약 표시
-            st.markdown("---")
             area_parts = [f"{a:.2f}" for a in corner_panel_areas if a > 0]
             if len(area_parts) > 1:
                 st.info(f"**전체 면적: {' + '.join(area_parts)} = {corner_total_area:.2f}㎡**")

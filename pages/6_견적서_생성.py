@@ -139,6 +139,28 @@ def load_pricebook_from_excel(
     return df
 
 
+@st.cache_data(show_spinner=False)
+def load_ceiling_drilling_prices(file_bytes: bytes) -> Dict[str, float]:
+    """천장판타공 시트에서 가공비 단가를 로드"""
+    try:
+        df = pd.read_excel(io.BytesIO(file_bytes), sheet_name="천장판타공")
+        prices = {}
+        for _, row in df.iterrows():
+            name = str(row.get("품목", "")).strip()
+            price = pd.to_numeric(row.get("단가", 0), errors="coerce") or 0
+            if name:
+                prices[name] = float(price)
+        return prices
+    except Exception:
+        # 시트가 없거나 오류시 기본값 반환
+        return {
+            "환풍기홀": 4000,
+            "사각매립등": 4000,
+            "원형등": 2000,
+            "직선1회": 1500,
+        }
+
+
 def find_item(
     df: pd.DataFrame,
     품목: str,
@@ -301,7 +323,7 @@ def convert_ceiling_data(ceil_result: dict) -> dict:
             "바디판넬": json_export.get("바디판넬", {}),
             "사이드판넬": json_export.get("사이드판넬", {}),
             "천공구": hole_count,
-            "단가": subtotal or json_export.get("소계", 0),
+            "소계": subtotal or json_export.get("소계", 0),
         }
 
     # Fallback: summary 데이터에서 추출
@@ -339,7 +361,7 @@ def convert_ceiling_data(ceil_result: dict) -> dict:
         "바디판넬": body_info,
         "사이드판넬": side_info,
         "천공구": 1,  # 기본값, json_export 없으면 1로 가정
-        "단가": int(subtotal),
+        "소계": int(subtotal),
     }
 
 
@@ -480,9 +502,12 @@ with st.sidebar:
 
 # Load pricebook
 price_df: Optional[pd.DataFrame] = None
+ceiling_drilling_prices: Dict[str, float] = {}
 if pricebook_file is not None:
     try:
-        price_df = load_pricebook_from_excel(pricebook_file.read())
+        file_bytes = pricebook_file.read()
+        price_df = load_pricebook_from_excel(file_bytes)
+        ceiling_drilling_prices = load_ceiling_drilling_prices(file_bytes)
         st.sidebar.success(f"단가표 로드 완료: {len(price_df)}행")
     except Exception as e:
         st.sidebar.error(f"단가표 로드 실패: {e}")
@@ -537,10 +562,10 @@ FIXED_QUANTITY_ITEMS = {
     "사각등": 0,
     "원형 매립등": 0,
     # 가공 품목 (천장판 타공)
-    "천장판 타공": 0,
-    "환풍기 타공": 1,
-    "원형 매립 타공": 0,
-    "사각 매립 타공": 0,
+    "환풍기홀": 1,
+    "사각매립등": 0,
+    "원형등 타공": 0,
+    "직선 1회": 0,
     # 공통자재
     "실리콘(내항균성)": 4.5,
     "실리콘(외장용)": 1,
@@ -864,7 +889,7 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
         "수전": ["세면기 수전", "샤워수전", "슬라이드바"],
         "액세서리": ["은경(거울)", "수건걸이", "휴지걸이", "일자유리선반", "코너선반"],
         "자재 품목 (욕실등)": ["욕실등", "원형등", "사각등", "원형 매립등"],
-        "가공 품목 (천장판 타공)": ["천장판 타공", "환풍기 타공", "원형 매립 타공", "사각 매립 타공"],
+        "가공 품목 (천장판 타공)": ["환풍기홀", "사각매립등", "원형등 타공", "직선 1회"],
         "공통자재": ["실리콘(내항균성)", "실리콘(외장용)", "우레탄폼",
                     "이면지지클립", "타일 평탄클립", "에폭시 접착제",
                     "코너마감재", "코너비드"],
@@ -1063,63 +1088,31 @@ else:
             add_row(rows, "타일", floor_tile_spec, floor_tile_qty, 0)
             warnings.append(f"'{floor_tile_spec}' 단가 미발견 → 0 처리")
 
-    # 3) 천장판
+    # 3) 천장판 - 천장판 계산 결과의 소계 + 타공비 합산
     if ceiling_data:
-        material = str(ceiling_data.get("재질", "")).upper()
-        body = ceiling_data.get("바디판넬", {}) or {}
-        side = ceiling_data.get("사이드판넬", {}) or {}
         total_cnt = float(ceiling_data.get("총개수", 0))
+        subtotal = float(ceiling_data.get("소계", 0))
 
-        # 천공구: 딕셔너리인 경우 개수 필드 추출
-        hole_data = ceiling_data.get("천공구", 0)
-        hole_cnt = float(hole_data.get("개수", 0) if isinstance(hole_data, dict) else hole_data)
+        # 타공 가공비용 합산 (자동지정 품목에서 수량 × 단가)
+        drilling_items = {
+            "환풍기홀": "환풍기홀",
+            "사각매립등": "사각매립등",
+            "원형등 타공": "원형등",
+            "직선 1회": "직선1회",
+        }
+        drilling_total = 0
+        for auto_name, price_key in drilling_items.items():
+            drill_qty = final_auto_items.get(auto_name, 0)
+            if drill_qty > 0:
+                drill_unit_price = ceiling_drilling_prices.get(price_key, 0)
+                drilling_total += drill_qty * drill_unit_price
 
-        # 메인 판
-        if material == "ABS":
-            rec = find_item(price_df, "천장판", None, spec_contains="ABS천장판")
-            add_row(
-                rows,
-                "천장판",
-                "ABS천장판",
-                total_cnt or (body.get("개수", 0) + side.get("개수", 0)),
-                rec.get("단가", 0) if rec is not None else 0,
-            )
-            if rec is None:
-                warnings.append("ABS천장판 단가 미발견 → 0 처리")
-        elif material == "GRP":
-            rec = find_item(price_df, "천장판", None, spec_contains="GRP천장판")
-            add_row(
-                rows,
-                "천장판",
-                "GRP천장판",
-                total_cnt or (body.get("개수", 0) + side.get("개수", 0)),
-                rec.get("단가", 0) if rec is not None else 0,
-            )
-            if rec is None:
-                warnings.append("GRP천장판 단가 미발견 → 0 처리")
-        else:
-            add_row(rows, "천장판", material, total_cnt, 0)
-            warnings.append(f"천장판 재질 '{material}' 단가 미발견 → 0 처리")
+        # 천장판 총 금액 = 소계 + 타공비
+        total_price = subtotal + drilling_total
+        qty = total_cnt if total_cnt > 0 else 1
+        unit_price = total_price / qty if qty > 0 else total_price
 
-        # 세부 수량 표기 (정보용)
-        if body.get("개수", 0):
-            add_row(
-                rows,
-                "천장판",
-                f"바디판넬 ({body.get('종류','')})",
-                float(body.get("개수", 0)),
-                float(ceiling_data.get("단가", 0)),
-            )
-        if side.get("개수", 0):
-            add_row(
-                rows,
-                "천장판",
-                f"사이드판넬 ({side.get('종류','')})",
-                float(side.get("개수", 0)),
-                float(ceiling_data.get("단가", 0)),
-            )
-        if hole_cnt:
-            add_row(rows, "천장판", "천공구", hole_cnt, 0)
+        add_row(rows, "천장판", "GRP천장판", qty, unit_price)
 
     # 4) 필수 선택 품목 반영 (SELECT_ITEMS_WITH_DEFAULT)
     for name, spec in final_select_items.items():
@@ -1202,10 +1195,10 @@ else:
         "사각등": ("욕실등", "사각등"),
         "원형 매립등": ("욕실등", "매립등"),
         # 가공 품목 (천장판 타공)
-        "천장판 타공": ("가공", "타공"),
-        "환풍기 타공": ("가공", "환풍기"),
-        "원형 매립 타공": ("가공", "원형"),
-        "사각 매립 타공": ("가공", "사각"),
+        "환풍기홀": ("가공", "환풍기"),
+        "사각매립등": ("가공", "사각"),
+        "원형등 타공": ("가공", "원형"),
+        "직선 1회": ("가공", "직선"),
         # 공통자재
         "실리콘(내항균성)": ("공통자재", "내항균"),
         "실리콘(외장용)": ("공통자재", "외장"),

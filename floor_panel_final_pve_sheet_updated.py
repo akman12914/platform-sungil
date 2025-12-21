@@ -1,27 +1,79 @@
-# app.py
+# floor_panel_final.py
 # -*- coding: utf-8 -*-
-# Floor base (바닥판) matching + costing + plan preview (사각/코너)
-# 실행: streamlit run app.py
+# Floor base (바닥판) matching + costing + plan preview (사각/코너) + 통합 플랫폼 연동
 
 from __future__ import annotations
 import io
+import os
+import json
+from datetime import datetime
 from typing import Optional, Dict, Any, Tuple, List
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-import json
 from PIL import Image, ImageDraw
+
+# --- Common Styles ---
+from common_styles import apply_common_styles, set_page_config
+
+# --- Authentication ---
+import auth
+
+# =========================================
+# Page Configuration
+# =========================================
+set_page_config(page_title="바닥판 계산 프로그램 (통합)", layout="wide")
+apply_common_styles()
+auth.require_auth()
+
+# =========================================
+# Session State Keys
+# =========================================
+EXPORT_DIR = "exports"
+os.makedirs(EXPORT_DIR, exist_ok=True)
+
+FLOOR_DONE_KEY = "floor_done"
+FLOOR_RESULT_KEY = "floor_result"
+CEIL_DONE_KEY = "ceil_done"
+CEIL_RESULT_KEY = "ceil_result"
+WALL_DONE_KEY = "wall_done"
+WALL_RESULT_KEY = "wall_result"
+
+# 공유 데이터 키
+SHARED_EXCEL_KEY = "shared_excel_file"
+SHARED_EXCEL_NAME_KEY = "shared_excel_filename"
+SHARED_BATH_SHAPE_KEY = "shared_bath_shape"
+SHARED_BATH_WIDTH_KEY = "shared_bath_width"
+SHARED_BATH_LENGTH_KEY = "shared_bath_length"
+SHARED_SINK_WIDTH_KEY = "shared_sink_width"
+SHARED_SINK_LENGTH_KEY = "shared_sink_length"
+SHARED_SHOWER_WIDTH_KEY = "shared_shower_width"
+SHARED_SHOWER_LENGTH_KEY = "shared_shower_length"
+SHARED_MATERIAL_KEY = "shared_floor_material"
+
+# 코너형 치수 공유 키 (v3, v4, v5, v6)
+SHARED_CORNER_V3_KEY = "shared_corner_v3"  # 세면부 길이
+SHARED_CORNER_V4_KEY = "shared_corner_v4"  # 오목 세로
+SHARED_CORNER_V5_KEY = "shared_corner_v5"  # 샤워부 길이
+SHARED_CORNER_V6_KEY = "shared_corner_v6"  # 샤워부 폭
+
+# =========================================
+# Utility Functions
+# =========================================
+def _save_json(path: str, data: dict):
+    """JSON 파일 저장"""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 # =========================================
 # App & Sidebar
 # =========================================
-st.set_page_config(page_title="바닥판 매칭·단가 산출 + 도면 미리보기", layout="wide")
-st.title("바닥판 매칭·단가 산출")
+st.title("바닥판 계산 프로그램 (통합)")
 
 with st.sidebar:
     st.header("① 데이터 업로드")
-    uploaded = st.file_uploader("엑셀 업로드 (필수 시트: '바닥판', '시공비')", type=["xlsx", "xls"])
+    uploaded = st.file_uploader("엑셀 업로드 (필수 시트: '바닥판', 'PVE' / 선택: '시공비')", type=["xlsx", "xls"])
 
     st.header("② 기본 입력")
     units = st.number_input("시공 세대수", min_value=1, step=1, value=100)
@@ -77,12 +129,6 @@ with st.sidebar:
             # 구분없음: 욕실크기만 입력
             L = st.number_input("욕실 길이 L (가로, 밑변)", min_value=400, step=10, value=2100)
             W = st.number_input("욕실 폭   W (세로)",       min_value=400, step=10, value=1400)
-
-    st.header("④ 관리비율 설정")
-    prod_rate_pct = st.number_input("생산관리비율 rₚ (%)", min_value=0.0, max_value=99.9, value=25.0, step=0.5)
-    sales_rate_pct = st.number_input("영업관리비율 rₛ (%)", min_value=0.0, max_value=30.0, value=20.0, step=0.5)
-    r_p = prod_rate_pct / 100.0
-    r_s = sales_rate_pct / 100.0
 
     st.write("---")
     do_calc = st.button("계산하기", type="primary")
@@ -164,36 +210,119 @@ def get_pve_process_cost(df_cost: pd.DataFrame) -> Optional[int]:
     return int(vals.iloc[0]) if not vals.empty else None
 
 
+# =========================================
+# Helpers: PVE Cost (from 'PVE' sheet)
+# =========================================
+DEFAULT_PVE_COSTS = {
+    "raw_unit_cost": 12000,  # 원/㎡
+    "process_costs": {
+        "일반형": 24331,
+        "욕실선반형": 31159,
+    }
+}
+
+def load_pve_costs_from_excel(xls: pd.ExcelFile) -> Dict[str, Any]:
+    """'PVE' 시트에서 PVE 원재료비(㎡당)와 가공비(형태별)를 로드합니다."""
+    out = {
+        "raw_unit_cost": DEFAULT_PVE_COSTS["raw_unit_cost"],
+        "process_costs": dict(DEFAULT_PVE_COSTS["process_costs"]),
+        "source": "DEFAULT",
+    }
+
+    if "PVE" not in xls.sheet_names:
+        return out
+
+    try:
+        df = pd.read_excel(xls, sheet_name="PVE")
+    except Exception:
+        return out
+
+    if df is None or df.empty:
+        return out
+
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    type_col = None
+    raw_col = None
+    proc_col = None
+    for c in df.columns:
+        cs = str(c).strip()
+        if type_col is None and ("유형" in cs or "타입" in cs or "Type" in cs):
+            type_col = c
+        if raw_col is None and ("원재료" in cs or "원가" in cs or "Raw" in cs):
+            raw_col = c
+        if proc_col is None and ("가공" in cs or "공정" in cs or "Process" in cs):
+            proc_col = c
+
+    # fallback: 첫 3개 컬럼 가정
+    if type_col is None and len(df.columns) >= 1:
+        type_col = df.columns[0]
+    if raw_col is None and len(df.columns) >= 2:
+        raw_col = df.columns[1]
+    if proc_col is None and len(df.columns) >= 3:
+        proc_col = df.columns[2]
+
+    def _to_int(x) -> Optional[int]:
+        if pd.isna(x):
+            return None
+        s = str(x).replace(",", "").strip()
+        try:
+            return int(float(s))
+        except Exception:
+            return None
+
+    process_costs: Dict[str, int] = {}
+    raw_unit_cost: Optional[int] = None
+
+    for _, r in df.iterrows():
+        t = str(r.get(type_col, "")).strip()
+        if not t or t.lower() in ("nan", "none"):
+            continue
+
+        rv = _to_int(r.get(raw_col, None))
+        pv = _to_int(r.get(proc_col, None))
+
+        if rv is not None and raw_unit_cost is None:
+            raw_unit_cost = rv
+        if pv is not None:
+            process_costs[t] = pv
+
+    if raw_unit_cost is not None or process_costs:
+        out["source"] = "PVE"
+        if raw_unit_cost is not None:
+            out["raw_unit_cost"] = int(raw_unit_cost)
+        if process_costs:
+            out["process_costs"] = {str(k).strip(): int(v) for k, v in process_costs.items()}
+
+    return out
+
+
+
+
 @st.cache_data
-def load_floor_panel_data(file_data: bytes) -> Tuple[pd.DataFrame, Optional[int]]:
-    """
-    바닥판 엑셀 파일을 로드하고 정규화합니다.
-    Streamlit cache를 사용하여 반복 로딩을 방지합니다.
-
-    Args:
-        file_data: 업로드된 파일의 바이트 데이터
-
-    Returns:
-        (정규화된 바닥판 DataFrame, PVE 시공비 또는 None)
-    """
+def load_floor_panel_data(file_data: bytes) -> Tuple[pd.DataFrame, Dict[str, Any], Optional[int]]:
+    """바닥판 엑셀 로드 + 정규화 + PVE 비용정보 로드."""
     xls = pd.ExcelFile(file_data)
 
-    missing_sheets = [s for s in ["바닥판", "시공비"] if s not in xls.sheet_names]
+    missing_sheets = [s for s in ["바닥판", "PVE"] if s not in xls.sheet_names]
     if missing_sheets:
         raise ValueError(f"필수 시트 누락: {missing_sheets}")
 
     df_raw = pd.read_excel(xls, sheet_name="바닥판")
     df = normalize_df(df_raw)
 
+    # 1) PVE 시트(우선)
+    pve_costs = load_pve_costs_from_excel(xls)
+
+    # 2) (호환) 시공비 시트에서 단일 PVE 공정비
     try:
         df_cost = pd.read_excel(xls, sheet_name="시공비")
-        pve_process_cost = get_pve_process_cost(df_cost)
+        pve_process_cost_legacy = get_pve_process_cost(df_cost)
     except Exception:
-        pve_process_cost = None
+        pve_process_cost_legacy = None
 
-    return df, pve_process_cost
-
-
+    return df, pve_costs, pve_process_cost_legacy
 def exact_series(s: pd.Series, v: Optional[float]) -> pd.Series:
     if v is None:
         return pd.Series(True, index=s.index)
@@ -221,51 +350,57 @@ def compute_subtotal_from_row(row: pd.Series) -> Tuple[Optional[int], Optional[i
     # 그래도 없으면 0
     return sink_v, shower_v, 0
 
-def price_blocks_pve(subtotal:int, r_p:float, r_s:float) -> Dict[str,int]:
-    """PVE: 생산관리비 비포함(단순 곱), 영업관리비 포함역산."""
-    prod_fee   = int(round(subtotal * r_p))
-    prod_incl  = int(round(subtotal + prod_fee))
-    sales_fee  = int(round(prod_incl/(1.0 - r_s) - prod_incl)) if r_s > 0 else 0
-    sales_incl = int(round(prod_incl + sales_fee))
-    return {
-        "생산관리비": prod_fee,
-        "생산관리비포함": prod_incl,
-        "영업관리비": sales_fee,
-        "영업관리비포함": sales_incl,
-    }
-
-def price_blocks_grp_frp(subtotal:int, r_p:float, r_s:float) -> Dict[str,int]:
-    """GRP/FRP: 생산관리비 포함역산, 영업관리비 포함역산."""
-    if r_p >= 1.0:
-        raise ZeroDivisionError("생산관리비율은 100% 미만이어야 합니다.")
-    prod_incl = int(round(subtotal / (1.0 - r_p))) if r_p > 0 else int(subtotal)
-    prod_fee  = int(round(prod_incl - subtotal))
-    sales_fee = int(round(prod_incl/(1.0 - r_s) - prod_incl)) if r_s > 0 else 0
-    sales_incl = int(round(prod_incl + sales_fee))
-    return {
-        "생산관리비": prod_fee,
-        "생산관리비포함": prod_incl,
-        "영업관리비": sales_fee,
-        "영업관리비포함": sales_incl,
-    }
-
-def pve_quote(W:int, L:int, is_access:bool, r_p:float, r_s:float, pve_process_cost:Optional[int]) -> Dict[str,int|str]:
-    """PVE 원가 산정 + 관리비 블록."""
+def pve_quote(
+    W: int,
+    L: int,
+    is_access: bool,
+    pve_costs: Dict[str, Any],
+    process_type: str,
+    pve_process_cost_legacy: Optional[int] = None,
+) -> Dict[str, int | str]:
+    """PVE 원가 산정 (PVE 시트 기반)."""
     add = 480 if is_access else 380
     Wm = (W + add) / 1000.0
     Lm = (L + add) / 1000.0
     area = Wm * Lm
-    raw = int(round(area * 12000))  # ㎡당 12,000원
-    process = int(pve_process_cost) if pve_process_cost is not None else 24331
-    subtotal = raw + process
-    blocks = price_blocks_pve(subtotal, r_p, r_s)
+
+    raw_unit = int(pve_costs.get("raw_unit_cost", DEFAULT_PVE_COSTS["raw_unit_cost"]))
+    raw = int(round(area * raw_unit))
+
+    proc_map = pve_costs.get("process_costs", {}) or {}
+    process = proc_map.get(process_type)
+
+    if process is None and pve_process_cost_legacy is not None:
+        process = int(pve_process_cost_legacy)
+
+    if process is None:
+        process = DEFAULT_PVE_COSTS["process_costs"].get(
+            process_type, DEFAULT_PVE_COSTS["process_costs"]["일반형"]
+        )
+
+    subtotal = int(raw + int(process))
     return {
         "소재": "PVE",
-        "원재료비": raw,
-        "가공비": process,
-        "소계": subtotal,
-        **blocks
+        "PVE가공형태": str(process_type),
+        "원재료비": int(raw),
+        "가공비": int(process),
+        "소계": int(subtotal),
     }
+
+
+def sidebar_pve_process_selector(decision_log: List[str]) -> str:
+    """PVE로 결정된 경우, 사이드바에서 가공형태를 선택하게 하고 선택 로그를 남깁니다."""
+    st.sidebar.markdown("---")
+    st.sidebar.header("④ PVE 옵션")
+    pve_process_type = st.sidebar.radio(
+        "PVE 가공 형태",
+        ["일반형", "욕실선반형"],
+        index=0 if st.session_state.get("pve_process_type", "일반형") != "욕실선반형" else 1,
+        horizontal=True,
+        key="pve_process_type",
+    )
+    decision_log.append(f"PVE 가공형태 선택: {pve_process_type}")
+    return pve_process_type
 
 def match_exact(df: pd.DataFrame,
                 user_type:str, shape:str, usage:str, boundary:Optional[str],
@@ -278,8 +413,8 @@ def match_exact(df: pd.DataFrame,
     """
     base = df[(df["유형"]==user_type) & (df["형태"]==shape) & (df["용도"]==usage)]
 
-    # 사각형의 경우 경계 컬럼도 확인
-    if shape == "사각형" and boundary is not None:
+    # 경계 컬럼 확인 (boundary가 전달되면 해당 값으로 필터링)
+    if boundary is not None:
         base = base[base["경계"].astype(str).str.strip() == boundary.strip()]
 
     if base.empty:
@@ -420,15 +555,21 @@ def draw_corner_plan(v1:int, v2:int, v3:int, v4:int, v5:int, v6:int,
 # Execution
 # =========================================
 if not uploaded:
-    st.info("왼쪽에서 엑셀 파일(시트: **바닥판**, **시공비**)을 업로드한 뒤 **계산하기**를 눌러주세요.")
+    st.info("왼쪽에서 엑셀 파일(시트: **바닥판**, **PVE**)을 업로드한 뒤 **계산하기**를 눌러주세요. (※ **시공비** 시트는 있으면 호환용으로 추가 참고)")
     st.stop()
+
+# 엑셀 파일을 세션에 저장 (다른 페이지에서 재사용)
+if uploaded is not None:
+    st.session_state[SHARED_EXCEL_KEY] = uploaded
+    st.session_state[SHARED_EXCEL_NAME_KEY] = uploaded.name
 
 # 엑셀 로딩 (캐시된 파싱 사용)
 try:
+    uploaded.seek(0)  # 파일 포인터를 처음으로 리셋
     file_bytes = uploaded.read()
-    df, pve_process_cost = load_floor_panel_data(file_bytes)
+    df, pve_costs, pve_process_cost_legacy = load_floor_panel_data(file_bytes)
 except ValueError as e:
-    st.error(f"필수 시트 누락: {e} — 엑셀을 확인하세요.")
+    st.error(f"필수 시트 누락: {e} — 엑셀에 '바닥판' 및 'PVE' 시트가 있는지 확인하세요.")
     st.stop()
 except Exception as e:
     st.error(f"엑셀 파싱 실패: {e}")
@@ -452,9 +593,6 @@ if units < 1:
     st.error("세대수는 1 이상이어야 합니다.")
     st.stop()
 
-if r_p >= 1.0:
-    st.error("생산관리비율 rₚ 는 100% 미만이어야 합니다.")
-    st.stop()
 
 # GRP 기본형 + 경계=구분 인 경우에만 세면/샤워 치수 체크
 if user_type == "기본형" and boundary == "구분" and (
@@ -469,6 +607,13 @@ matched_user_type = user_type
 
 # GRP 기본/코너형용 후보 저장
 base_grp_result: Optional[Dict[str, Any]] = None
+
+
+# PVE 가공형태 (PVE로 결정될 때만 UI 표시)
+if "pve_process_type" not in st.session_state:
+    st.session_state["pve_process_type"] = "일반형"
+pve_process_type = st.session_state.get("pve_process_type", "일반형")
+
 integrated_grp_result: Optional[Dict[str, Any]] = None
 
 result: Optional[Dict[str, Any]] = None
@@ -476,21 +621,23 @@ result: Optional[Dict[str, Any]] = None
 # 0) 세대수 < 100 → PVE 강제
 if units < 100:
     decision_log.append(f"세대수={units} (<100) → PVE 강제 선택")
+    
+    pve_process_type = sidebar_pve_process_selector(decision_log)
     pve = pve_quote(
         W, L,
         is_access=(is_access == "예(주거약자)"),
-        r_p=r_p, r_s=sales_rate_pct/100.0,
-        pve_process_cost=pve_process_cost
+        pve_costs=pve_costs,
+        process_type=pve_process_type,
+        pve_process_cost_legacy=pve_process_cost_legacy,
     )
     result = {
         "소재": "PVE",
         "세면부단가": None,
         "샤워부단가": None,
+        "PVE가공형태": pve.get("PVE가공형태"),
+        "원재료비": pve.get("원재료비"),
+        "가공비": pve.get("가공비"),
         "소계": pve["소계"],
-        "생산관리비": pve["생산관리비"],
-        "생산관리비포함": pve["생산관리비포함"],
-        "영업관리비": pve["영업관리비"],
-        "영업관리비포함": pve["영업관리비포함"],
     }
 
 else:
@@ -499,7 +646,7 @@ else:
     if user_type == "타일일체형":
         boundary_val = None
     else:
-        boundary_val = boundary if boundary == "구분" else None
+        boundary_val = boundary  # "구분" 또는 "구분없음" 그대로 전달
 
     grp_df = df[df["소재"].astype(str).str.startswith("GRP", na=False)]
     r_grp = match_exact(
@@ -514,13 +661,11 @@ else:
         if user_type == "기본형":
             decision_log.append("GRP 기본/코너형 매칭 성공 (완전일치)")
             sink, shower, subtotal = compute_subtotal_from_row(r_grp)
-            base_pb = price_blocks_grp_frp(subtotal, r_p, sales_rate_pct/100.0)
             base_grp_result = {
                 "소재": "GRP",
                 "세면부단가": sink,
                 "샤워부단가": shower,
                 "소계": subtotal,
-                **base_pb,
             }
 
             # 같은 욕실 크기의 GRP 일체형 찾기
@@ -532,13 +677,11 @@ else:
                     integrated_match["샤워부단가"],
                     integrated_match["소계"],
                 )
-                int_pb = price_blocks_grp_frp(subtotal2, r_p, sales_rate_pct/100.0)
                 integrated_grp_result = {
                     "소재": "GRP",
                     "세면부단가": sink2,
                     "샤워부단가": shower2,
                     "소계": subtotal2,
-                    **int_pb,
                 }
             else:
                 decision_log.append("같은 욕실 크기의 GRP 일체형 없음")
@@ -547,13 +690,11 @@ else:
             # 중앙배수, 타일일체형 등: 대체 없이 그대로 사용
             decision_log.append("GRP 매칭 성공 (완전일치, 대체 없음)")
             sink, shower, subtotal = compute_subtotal_from_row(r_grp)
-            pb = price_blocks_grp_frp(subtotal, r_p, sales_rate_pct/100.0)
             result = {
                 "소재": "GRP",
                 "세면부단가": sink,
                 "샤워부단가": shower,
                 "소계": subtotal,
-                **pb,
             }
 
     else:
@@ -567,13 +708,11 @@ else:
         if r_frp is not None:
             decision_log.append("FRP 매칭 성공 (완전일치)")
             sink, shower, subtotal = compute_subtotal_from_row(r_frp)
-            pb = price_blocks_grp_frp(subtotal, r_p, sales_rate_pct/100.0)
             result = {
                 "소재": "FRP",
                 "세면부단가": sink,
                 "샤워부단가": shower,
                 "소계": subtotal,
-                **pb,
             }
         else:
             decision_log.append("FRP 매칭 실패")
@@ -582,21 +721,23 @@ else:
                 decision_log.append("유형=중앙배수 → 매칭 실패로 PVE 계산")
             else:
                 decision_log.append("GRP/FRP 모두 매칭 실패 → PVE 계산")
+            
+            pve_process_type = sidebar_pve_process_selector(decision_log)
             pve = pve_quote(
                 W, L,
                 is_access=(is_access == "예(주거약자)"),
-                r_p=r_p, r_s=sales_rate_pct/100.0,
-                pve_process_cost=pve_process_cost
+                pve_costs=pve_costs,
+                process_type=pve_process_type,
+                pve_process_cost_legacy=pve_process_cost_legacy,
             )
             result = {
                 "소재": "PVE",
                 "세면부단가": None,
                 "샤워부단가": None,
+                "PVE가공형태": pve.get("PVE가공형태"),
+                "원재료비": pve.get("원재료비"),
+                "가공비": pve.get("가공비"),
                 "소계": pve["소계"],
-                "생산관리비": pve["생산관리비"],
-                "생산관리비포함": pve["생산관리비포함"],
-                "영업관리비": pve["영업관리비"],
-                "영업관리비포함": pve["영업관리비포함"],
             }
 
 # =========================================
@@ -675,18 +816,23 @@ if boundary == "구분" and (sw is not None and sl is not None and shw is not No
 # 단가 정보
 result_data.append({"항목": "소재(선택)", "값": result["소재"]})
 
+
+# PVE 상세(선택) 표기
+if result.get("소재") == "PVE":
+    if result.get("PVE가공형태"):
+        result_data.append({"항목": "PVE 가공형태", "값": str(result.get("PVE가공형태"))})
+    if result.get("원재료비") is not None:
+        result_data.append({"항목": "PVE 원재료비", "값": f"{int(result.get('원재료비')):,} 원"})
+    if result.get("가공비") is not None:
+        result_data.append({"항목": "PVE 가공비", "값": f"{int(result.get('가공비')):,} 원"})
+
+
 if result["세면부단가"] is not None:
     result_data.append({"항목": "세면부바닥판 단가", "값": f"{result['세면부단가']:,} 원"})
 if result["샤워부단가"] is not None:
     result_data.append({"항목": "샤워부바닥판 단가", "값": f"{result['샤워부단가']:,} 원"})
 
-result_data.extend([
-    {"항목": "소계", "값": f"{result['소계']:,} 원"},
-    {"항목": f"생산관리비({prod_rate_pct:.1f}%)", "값": f"{result['생산관리비']:,} 원"},
-    {"항목": "생산관리비 포함", "값": f"{result['생산관리비포함']:,} 원"},
-    {"항목": f"영업관리비({sales_rate_pct:.1f}%)", "값": f"{result['영업관리비']:,} 원"},
-    {"항목": "영업관리비 포함(최종)", "값": f"{result['영업관리비포함']:,} 원"},
-])
+result_data.append({"항목": "소계", "값": f"{result['소계']:,} 원"})
 
 # 표로 표시
 result_df = pd.DataFrame(result_data)
@@ -696,9 +842,39 @@ st.info("의사결정 로그", icon="ℹ️")
 log_df = pd.DataFrame([{"단계": i+1, "결정": msg} for i, msg in enumerate(decision_log)])
 st.dataframe(log_df, use_container_width=True, hide_index=True)
 
+# =========================================
+# 세션 상태 저장 및 공유 데이터 설정
+# =========================================
+
+# 욕실 정보를 다른 페이지에서 사용할 수 있도록 저장
+st.session_state[SHARED_BATH_SHAPE_KEY] = shape
+st.session_state[SHARED_BATH_WIDTH_KEY] = W
+st.session_state[SHARED_BATH_LENGTH_KEY] = L
+st.session_state[SHARED_SINK_WIDTH_KEY] = sw
+st.session_state[SHARED_SINK_LENGTH_KEY] = sl
+st.session_state[SHARED_SHOWER_WIDTH_KEY] = shw
+st.session_state[SHARED_SHOWER_LENGTH_KEY] = shl
+st.session_state[SHARED_MATERIAL_KEY] = result["소재"]
+
+# 코너형인 경우 v3, v4, v5, v6 값도 저장
+if shape == "코너형" and v3 is not None:
+    st.session_state[SHARED_CORNER_V3_KEY] = v3
+    st.session_state[SHARED_CORNER_V4_KEY] = v4
+    st.session_state[SHARED_CORNER_V5_KEY] = v5
+    st.session_state[SHARED_CORNER_V6_KEY] = v6
+else:
+    # 사각형인 경우 코너형 값 초기화
+    st.session_state[SHARED_CORNER_V3_KEY] = None
+    st.session_state[SHARED_CORNER_V4_KEY] = None
+    st.session_state[SHARED_CORNER_V5_KEY] = None
+    st.session_state[SHARED_CORNER_V6_KEY] = None
+
 # ====== floor.json 저장 + 다운로드 버튼 ======
 floor_payload = {
     "소재": result["소재"],
+    "PVE가공형태": (str(result.get("PVE가공형태")) if result.get("소재") == "PVE" and result.get("PVE가공형태") else None),
+    "원재료비": (int(result.get("원재료비")) if result.get("소재") == "PVE" and result.get("원재료비") is not None else None),
+    "가공비": (int(result.get("가공비")) if result.get("소재") == "PVE" and result.get("가공비") is not None else None),
     "유형": display_type,
     "형태": shape,
     "욕실폭": int(W),
@@ -710,30 +886,56 @@ floor_payload = {
     "세면부바닥판 단가": (int(result["세면부단가"]) if result.get("세면부단가") is not None else None),
     "샤워부바닥판 단가": (int(result["샤워부단가"]) if result.get("샤워부단가") is not None else None),
     "소계": int(result["소계"]),
-    "생산관리비": int(result["생산관리비"]),
-    "생산관리비포함단가": int(result["생산관리비포함"]),
-    "영업관리비": int(result["영업관리비"]),
-    "영업관리비포함단가": int(result["영업관리비포함"]),
 }
 
-# 파일 저장 (로컬 floor.json 생성)
-try:
-    with open("floor.json", "w", encoding="utf-8") as f:
-        json.dump(floor_payload, f, ensure_ascii=False, indent=2)
-except Exception as e:
-    st.error(f"floor.json 저장 실패: {e}")
+# 세션 상태에 결과 저장
+st.session_state[FLOOR_RESULT_KEY] = {
+    "section": "floor",
+    "inputs": {
+        "units": units,
+        "user_type": user_type,
+        "shape": shape,
+        "usage": usage,
+        "is_access": is_access,
+        "boundary": boundary,
+        "W": W,
+        "L": L,
+        "sw": sw,
+        "sl": sl,
+        "shw": shw,
+        "shl": shl,
+    },
+    "result": floor_payload,
+    "decision_log": decision_log,
+}
+st.session_state[FLOOR_DONE_KEY] = True
 
-# Streamlit 다운로드 버튼
+# JSON 파일로 저장
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+json_filename = f"floor_{timestamp}.json"
+json_path = os.path.join(EXPORT_DIR, json_filename)
+_save_json(json_path, st.session_state[FLOOR_RESULT_KEY])
+
+# 다운로드 버튼
+st.markdown("---")
 json_bytes = json.dumps(floor_payload, ensure_ascii=False, indent=2).encode("utf-8")
 st.download_button(
-    label="floor.json 다운로드",
+    label="📥 floor.json 다운로드",
     data=json_bytes,
     file_name="floor.json",
     mime="application/json",
     type="primary",
 )
 
-st.caption("저장된 JSON 미리보기")
-st.json(floor_payload)
+# (선택) 화면에서 JSON 미리보기
+with st.expander("📄 저장된 JSON 미리보기", expanded=False):
+    st.json(floor_payload)
 
-st.success("계산 완료 ✅")
+st.success("✅ 계산 완료")
+
+# 다음 단계 안내
+st.info("""
+**다음 단계**: 벽판 계산을 진행하세요.
+
+좌측 사이드바에서 **벽판 계산** 페이지로 이동하여 계산을 진행할 수 있습니다.
+""")

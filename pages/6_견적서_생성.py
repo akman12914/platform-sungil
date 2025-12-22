@@ -251,7 +251,7 @@ def convert_floor_data(floor_result: dict) -> dict:
     return {
         "재질": material_clean,
         "규격": spec,
-        "수량": units,  # 세대수 = 수량
+        "수량": 1,  # 세대당 1개 (세대수는 inputs에 유지)
         "단가": 단가,
         "주거약자": inputs.get("user_type", "") == "주거약자",
         "inputs": inputs,  # inputs 정보 유지 (세대수 등)
@@ -1222,6 +1222,8 @@ else:
     for item_name, qty in final_auto_items.items():
         if qty <= 0:
             continue  # 수량이 0이면 스킵
+        if item_name == "환풍기홀":
+            continue  # 환풍기홀은 천장판 타공비에 이미 포함됨
 
         # 카테고리 매핑 조회
         cat_info = AUTO_ITEM_CATEGORY_MAP.get(item_name)

@@ -63,7 +63,8 @@ SHARED_CORNER_V6_KEY = "shared_corner_v6"  # 샤워부 폭
 # =========================================
 # 전역 상수
 # =========================================
-CUT_COST = 3000
+CUT_COST_BODY = 1500  # 바디 절단 비용 기본값 (천장판타공 시트에서 로드 시 덮어씀)
+CUT_COST_SIDE = 1500  # 사이드 절단 비용 기본값
 STEP_MM = 50
 BODY_MAX_W = 1450  # BODY: 허용 최대 '길이'(L′)
 SIDE_MAX_W = 1200  # SIDE: 허용 최대 '길이'(L′)
@@ -169,7 +170,7 @@ def _to_int(x):
 
 
 @st.cache_data
-def load_ceiling_panel_data(file_data: bytes) -> Tuple[List[Panel], List[Panel], List[Panel], int]:
+def load_ceiling_panel_data(file_data: bytes) -> Tuple[List[Panel], List[Panel], List[Panel], int, int]:
     """
     천장판 엑셀 파일을 로드하고 카탈로그를 파싱합니다.
     Streamlit cache를 사용하여 반복 로딩을 방지합니다.
@@ -178,7 +179,7 @@ def load_ceiling_panel_data(file_data: bytes) -> Tuple[List[Panel], List[Panel],
         file_data: 업로드된 파일의 바이트 데이터
 
     Returns:
-        (BODY 리스트, SIDE 리스트, HATCH 리스트, CUT_COST)
+        (BODY 리스트, SIDE 리스트, HATCH 리스트, CUT_COST_BODY, CUT_COST_SIDE)
     """
     xls = pd.ExcelFile(file_data)
 
@@ -189,23 +190,23 @@ def load_ceiling_panel_data(file_data: bytes) -> Tuple[List[Panel], List[Panel],
     df_cat = pd.read_excel(xls, sheet_name="천장판")
     body, side, hatch = load_catalog_from_excel(df_cat)
 
-    # 절단 비용 로딩 (시공비 시트)
-    cut_cost = CUT_COST  # 기본값
+    # 절단 비용 로딩 (천장판타공 시트에서 바디/사이드 각각)
+    cut_cost_body = CUT_COST_BODY  # 기본값
+    cut_cost_side = CUT_COST_SIDE  # 기본값
     try:
-        if "시공비" in xls.sheet_names:
-            df_cost = pd.read_excel(xls, sheet_name="시공비")
-            df_cost["항목"] = df_cost["항목"].astype(str).str.strip()
-            df_cost["공정"] = df_cost["공정"].astype(str).str.strip()
-
-            mask = (df_cost["항목"] == "천장판") & (df_cost["공정"] == "절단")
-            if mask.any():
-                cut_val = df_cost.loc[mask, "시공비"].iloc[0]
-                if pd.notna(cut_val):
-                    cut_cost = int(float(str(cut_val).replace(",", "")))
+        if "천장판타공" in xls.sheet_names:
+            df_drill = pd.read_excel(xls, sheet_name="천장판타공")
+            for _, row in df_drill.iterrows():
+                name = str(row.get("품목", "")).strip()
+                price = pd.to_numeric(row.get("단가", 0), errors="coerce") or 0
+                if name == "바디":
+                    cut_cost_body = int(price)
+                elif name == "사이드":
+                    cut_cost_side = int(price)
     except Exception:
         pass  # 실패 시 기본값 사용
 
-    return body, side, hatch, cut_cost
+    return body, side, hatch, cut_cost_body, cut_cost_side
 
 
 def load_catalog_from_excel(df: pd.DataFrame) -> Tuple[List[Panel], List[Panel], List[Panel]]:
@@ -310,6 +311,8 @@ def pick_best_panel(
     row_W: int,
     row_idx: int,
     notch: bool = False,
+    cut_cost_body: int = CUT_COST_BODY,
+    cut_cost_side: int = CUT_COST_SIDE,
 ) -> Optional[Tuple[Panel, bool, int, int]]:
     """
     kind ("BODY" or "SIDE") 카탈로그에서 need_L × row_W 이상을 만족하는 패널 중
@@ -341,6 +344,9 @@ def pick_best_panel(
     best: Optional[Tuple[Panel, bool, int, int]] = None
     best_key: Optional[Tuple[int, int, int]] = None  # (cuts, cost, slack)
 
+    # 바디/사이드에 따라 절단 비용 결정
+    cut_cost = cut_cost_body if eff_kind == "BODY" else cut_cost_side
+
     for p in catalog:
         # -----------------------------
         # 1) 비회전 후보 (공통)
@@ -350,7 +356,7 @@ def pick_best_panel(
             cuts = (1 if p.l > need_L else 0) + (1 if p.w > row_W else 0)
             extra = (2 if notch else 0)
             total_cuts = cuts + extra
-            cost = p.price + total_cuts * CUT_COST
+            cost = p.price + total_cuts * cut_cost
             slack = (p.l - need_L) + (p.w - row_W)
             key = (total_cuts, cost, slack)
 
@@ -367,7 +373,7 @@ def pick_best_panel(
             cuts = (1 if p.w > need_L else 0) + (1 if p.l > row_W else 0)
             extra = (2 if notch else 0)
             total_cuts = cuts + extra
-            cost = p.price + total_cuts * CUT_COST
+            cost = p.price + total_cuts * cut_cost
             slack = (p.w - need_L) + (p.l - row_W)
             key = (total_cuts, cost, slack)
 
@@ -713,6 +719,8 @@ def solve_rect_cellwise(
     sink_Li: int,
     show_Wi: int,
     show_Li: int,
+    cut_cost_body: int = CUT_COST_BODY,
+    cut_cost_side: int = CUT_COST_SIDE,
 ) -> PlacementPack:
     """
     사각형 욕실용 셀 단위 엔진.
@@ -800,6 +808,8 @@ def solve_rect_cellwise(
                 row_W=W_part,
                 row_idx=r_idx,
                 notch=False,
+                cut_cost_body=cut_cost_body,
+                cut_cost_side=cut_cost_side,
             )
             if pick is None:
                 # 이 셀을 만족하는 패널이 없으면 전체 배치 실패
@@ -1139,6 +1149,8 @@ def solve_corner_cellwise(
     show_Wi: int,
     show_Li: int,
     notch_W: int,
+    cut_cost_body: int = CUT_COST_BODY,
+    cut_cost_side: int = CUT_COST_SIDE,
 ) -> PlacementPack:
     """
     코너형 욕실용 셀 단위 엔진.
@@ -1276,6 +1288,8 @@ def solve_corner_cellwise(
                 row_W=row_W,
                 row_idx=r_idx,
                 notch=use_notch,
+                cut_cost_body=cut_cost_body,
+                cut_cost_side=cut_cost_side,
             )
             if pick is None:
                 # 이 셀을 만족하는 패널이 없으면 전체 배치 실패
@@ -1692,14 +1706,14 @@ if excel_file:
         # 캐시된 함수로 데이터 로드
         excel_file.seek(0)  # 파일 포인터를 처음으로 리셋
         file_bytes = excel_file.read()
-        BODY, SIDE, HATCH, CUT_COST = load_ceiling_panel_data(file_bytes)
+        BODY, SIDE, HATCH, CUT_COST_BODY_LOADED, CUT_COST_SIDE_LOADED = load_ceiling_panel_data(file_bytes)
 
         # 공유 카탈로그 표시
         st.info(f"📂 공유 카탈로그 사용 중: {excel_filename} — BODY {len(BODY)}종, SIDE {len(SIDE)}종, 점검구 {len(HATCH)}종")
 
         # 절단비가 기본값이 아니면 표시
-        if CUT_COST != 2500:  # 기본값과 다르면
-            st.info(f"시공비 시트에서 천장판 절단비 {CUT_COST:,}원 로드됨")
+        if CUT_COST_BODY_LOADED != CUT_COST_BODY or CUT_COST_SIDE_LOADED != CUT_COST_SIDE:
+            st.info(f"천장판타공 시트에서 절단비 로드됨 — 바디: {CUT_COST_BODY_LOADED:,}원, 사이드: {CUT_COST_SIDE_LOADED:,}원")
 
     except Exception as e:
         st.error(f"엑셀 파싱 실패: {e}")
@@ -1852,7 +1866,9 @@ try:
         hW, hL = z["shower"]["W_inst"], z["shower"]["L_inst"]
 
         # ✅ 사각형은 셀 단위 엔진 사용
-        pack = solve_rect_cellwise(BODY, SIDE, sW, sL, hW, hL)
+        pack = solve_rect_cellwise(BODY, SIDE, sW, sL, hW, hL,
+                                   cut_cost_body=CUT_COST_BODY_LOADED,
+                                   cut_cost_side=CUT_COST_SIDE_LOADED)
         meta = {
             "유형": "사각",
             "입력": f"L={L}, W={W}, split={split}",
@@ -1868,7 +1884,9 @@ try:
         notch_W = z["v4_notch"]  # 오목부 원 폭
 
         # ✅ 코너형용 셀 단위 엔진 사용
-        pack = solve_corner_cellwise(BODY, SIDE, sW, sL, hW, hL, notch_W=notch_W)
+        pack = solve_corner_cellwise(BODY, SIDE, sW, sL, hW, hL, notch_W=notch_W,
+                                     cut_cost_body=CUT_COST_BODY_LOADED,
+                                     cut_cost_side=CUT_COST_SIDE_LOADED)
         meta = {
             "유형": "코너",
             "입력": f"L1={v1}, W2={v2}, L3={v3}, W4={v4}, L5={v5}, W6={v6}",

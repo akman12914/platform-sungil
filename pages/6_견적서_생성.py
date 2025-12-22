@@ -141,12 +141,15 @@ def load_pricebook_from_excel(
 
 @st.cache_data(show_spinner=False)
 def load_ceiling_drilling_prices(file_bytes: bytes) -> Dict[str, float]:
-    """천장판타공 시트에서 가공비 단가를 로드"""
+    """천장판타공 시트에서 가공비 단가를 로드 (바디/사이드 절단 항목 제외)"""
     try:
         df = pd.read_excel(io.BytesIO(file_bytes), sheet_name="천장판타공")
         prices = {}
         for _, row in df.iterrows():
             name = str(row.get("품목", "")).strip()
+            # 바디/사이드는 절단 비용이므로 타공 가공비에서 제외
+            if name in ("바디", "사이드"):
+                continue
             price = pd.to_numeric(row.get("단가", 0), errors="coerce") or 0
             if name:
                 prices[name] = float(price)
@@ -1109,10 +1112,9 @@ else:
 
         # 천장판 총 금액 = 소계 + 타공비
         total_price = subtotal + drilling_total
-        qty = total_cnt if total_cnt > 0 else 1
-        unit_price = total_price / qty if qty > 0 else total_price
 
-        add_row(rows, "천장판", "GRP천장판", qty, unit_price)
+        # 단가와 금액 모두 총 금액으로 표시 (수량 1)
+        add_row(rows, "천장판", "GRP천장판", 1, total_price)
 
     # 4) 필수 선택 품목 반영 (SELECT_ITEMS_WITH_DEFAULT)
     for name, spec in final_select_items.items():

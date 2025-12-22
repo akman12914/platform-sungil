@@ -30,63 +30,9 @@ st.title("인건비 계산")
 # ------------------------------
 BUCKETS = ["≤49", "≤99", "≤149", "≤199", "≤299", "≥300"]
 
-# 코너형 규격 그룹 정의 (면적 범위 기준, 엑셀 '설치비 단가 내역(지역) 참고만~~' 시트)
-# 면적 범위로 단가 그룹 매칭
-CORNER_AREA_GROUPS = [
-    {
-        "name": "그룹1",
-        "label": "1520/1521",
-        "area_min": 3.0,
-        "area_max": 3.15,
-        "price_under_300": 350000,
-        "price_over_300": 370000,
-    },
-    {
-        "name": "그룹2",
-        "label": "1522/1523/1621",
-        "area_min": 3.16,
-        "area_max": 3.36,
-        "price_under_300": 360000,
-        "price_over_300": 380000,
-    },
-    {
-        "name": "그룹3",
-        "label": "1524/1622/1623",
-        "area_min": 3.37,
-        "area_max": 3.68,
-        "price_under_300": 370000,
-        "price_over_300": 390000,
-    },
-    {
-        "name": "그룹4",
-        "label": "1624/1525/1722/1723",
-        "area_min": 3.69,
-        "area_max": 3.91,
-        "price_under_300": 400000,
-        "price_over_300": 420000,
-    },
-    {
-        "name": "그룹5",
-        "label": "1825",
-        "area_min": 3.92,
-        "area_max": 4.5,
-        "price_under_300": 420000,
-        "price_over_300": 440000,
-    },
-]
-
-def get_corner_group_by_area(area: float) -> dict:
-    """면적으로 코너형 단가 그룹 찾기"""
-    for group in CORNER_AREA_GROUPS:
-        if group["area_min"] <= area <= group["area_max"]:
-            return group
-    # 범위 밖이면 가장 가까운 그룹 반환
-    if area < CORNER_AREA_GROUPS[0]["area_min"]:
-        return CORNER_AREA_GROUPS[0]
-    return CORNER_AREA_GROUPS[-1]
-
 # ★ 사이드바에서 조절할 옵션 (기본값)
-include_meals = True          # 식대·숙박비 포함 여부
+include_meals = True  # 식대·숙박비 포함 여부
+
 
 def parse_code_to_area(code: str) -> float:
     """
@@ -112,18 +58,28 @@ def parse_code_to_area(code: str) -> float:
     except ValueError:
         return 0.0
 
+
 def get_bucket(units: int) -> str:
-    if units <= 49: return "≤49"
-    if units <= 99: return "≤99"
-    if units <= 149: return "≤149"
-    if units <= 199: return "≤199"
-    if units <= 299: return "≤299"
+    if units <= 49:
+        return "≤49"
+    if units <= 99:
+        return "≤99"
+    if units <= 149:
+        return "≤149"
+    if units <= 199:
+        return "≤199"
+    if units <= 299:
+        return "≤299"
     return "≥300"
+
 
 def fmt_money(v: float) -> str:
     return f"{int(round(v)):,.0f}원"
 
-def area_adjust(material: str, area: float, area_rules: Dict[str, Dict[str, Any]]) -> int:
+
+def area_adjust(
+    material: str, area: float, area_rules: Dict[str, Dict[str, Any]]
+) -> int:
     """경계 포함. 기준 이하 -30,000, 이상 +30,000, 범위 내 0"""
     rule = area_rules.get(material.upper(), None)
     if not rule:
@@ -136,9 +92,11 @@ def area_adjust(material: str, area: float, area_rules: Dict[str, Dict[str, Any]
         return int(rule["delta_above"])
     return 0
 
+
 # ------------------------------
 # 엑셀 파싱 유틸 (250905_시스템욕실 설치비 내역서 전용)
 # ------------------------------
+
 
 def bucket_label_to_code(label: str) -> str:
     """'1 ~ 49세대 이하', '◎ 코너형 ◎ 49세대 이하' 같은 문자열 → BUCKET 코드로 변환"""
@@ -175,7 +133,7 @@ def _extract_area_range(row: pd.Series) -> Tuple[float, float]:
     예: '◎ 바닥판 면적기준: 2.5 ~ 2.9㎡ 이하'
     """
     text = " ".join(str(x) for x in row if isinstance(x, str))
-    m = re.search(r'(\d+(?:\.\d+)?)\s*~\s*(\d+(?:\.\d+)?)', text)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*~\s*(\d+(?:\.\d+)?)", text)
     if m:
         return float(m.group(1)), float(m.group(2))
     return 2.5, 2.9  # fallback
@@ -185,7 +143,7 @@ def _extract_area_deltas(text: str) -> Tuple[int, int]:
     """
     '기준면적 이하일때 -30,000원, 이상일때 +30,000원' 같은 문장에서 보정값 추출
     """
-    m = re.search(r'이하일때\s*([+-]?\d[\d,]*)원.*이상일때\s*([+-]?\d[\d,]*)원', text)
+    m = re.search(r"이하일때\s*([+-]?\d[\d,]*)원.*이상일때\s*([+-]?\d[\d,]*)원", text)
     if m:
         below = int(m.group(1).replace(",", ""))
         above = int(m.group(2).replace(",", ""))
@@ -211,16 +169,18 @@ def _parse_grp_summary_250905(df: pd.DataFrame):
         label = str(df.iloc[i, 0])
         bcode = bucket_label_to_code(label)
         buckets.append(bcode)
-        prices.append(int(df.iloc[i, 1]))      # 기준단가(세대당)
-        vehicles.append(float(df.iloc[i, 10])) # 차량대수
-        fuel.append(float(df.iloc[i, 11]))     # 차량당 유류비
+        prices.append(int(df.iloc[i, 1]))  # 기준단가(세대당)
+        vehicles.append(float(df.iloc[i, 10]))  # 차량대수
+        fuel.append(float(df.iloc[i, 11]))  # 차량당 유류비
 
     base_grp = pd.DataFrame({"bucket": buckets, "base_price": prices})
-    vehicles_tbl = pd.DataFrame({
-        "bucket": buckets,
-        "vehicles": vehicles,
-        "fuel_per_vehicle": fuel,
-    })
+    vehicles_tbl = pd.DataFrame(
+        {
+            "bucket": buckets,
+            "vehicles": vehicles,
+            "fuel_per_vehicle": fuel,
+        }
+    )
 
     # 3) 면적 기준/보정
     lo, hi = _extract_area_range(df.iloc[0])
@@ -256,7 +216,7 @@ def _parse_grp_summary_250905(df: pd.DataFrame):
         crew_count, meal_unit, lodging_unit = 4, 10000, 25000
 
     meals_std = {
-        "included_in_base": False,   # 기준단가에 숙식비 미포함 가정
+        "included_in_base": False,  # 기준단가에 숙식비 미포함 가정
         "crew_count": crew_count,
         "meal_unit": meal_unit,
         "lodging_unit": lodging_unit,
@@ -320,22 +280,54 @@ def _make_adjust_default_table() -> pd.DataFrame:
     rows = []
 
     # GRP: 엑셀 "GRP 바닥판(코너형, 일반세대) 기준" 메모 그대로
-    rows.append({"material": "GRP",   "shape": "코너형", "user_type": "일반",   "delta": 0})
-    rows.append({"material": "GRP",   "shape": "사각형", "user_type": "일반",   "delta": 10000})
-    rows.append({"material": "GRP",   "shape": "코너형", "user_type": "주거약자", "delta": 30000})
-    rows.append({"material": "GRP",   "shape": "사각형", "user_type": "주거약자", "delta": 40000})
+    rows.append({"material": "GRP", "shape": "코너형", "user_type": "일반", "delta": 0})
+    rows.append(
+        {"material": "GRP", "shape": "사각형", "user_type": "일반", "delta": 10000}
+    )
+    rows.append(
+        {"material": "GRP", "shape": "코너형", "user_type": "주거약자", "delta": 30000}
+    )
+    rows.append(
+        {"material": "GRP", "shape": "사각형", "user_type": "주거약자", "delta": 40000}
+    )
 
     # FRP: 엑셀 "◎ FRP 바닥판일때 설치비" 메모대로 GRP 기준 대비 보정
-    rows.append({"material": "FRP",   "shape": "코너형", "user_type": "일반",   "delta": 10000})
-    rows.append({"material": "FRP",   "shape": "사각형", "user_type": "일반",   "delta": 20000})
-    rows.append({"material": "FRP",   "shape": "코너형", "user_type": "주거약자", "delta": 40000})
-    rows.append({"material": "FRP",   "shape": "사각형", "user_type": "주거약자", "delta": 50000})
+    rows.append(
+        {"material": "FRP", "shape": "코너형", "user_type": "일반", "delta": 10000}
+    )
+    rows.append(
+        {"material": "FRP", "shape": "사각형", "user_type": "일반", "delta": 20000}
+    )
+    rows.append(
+        {"material": "FRP", "shape": "코너형", "user_type": "주거약자", "delta": 40000}
+    )
+    rows.append(
+        {"material": "FRP", "shape": "사각형", "user_type": "주거약자", "delta": 50000}
+    )
 
     # PP/PE (PVE): 엑셀 "PVE 바닥판(코너형, 일반세대) 기준" 메모가 GRP와 동일 규칙
-    rows.append({"material": "PP/PE", "shape": "코너형", "user_type": "일반",   "delta": 0})
-    rows.append({"material": "PP/PE", "shape": "사각형", "user_type": "일반",   "delta": 10000})
-    rows.append({"material": "PP/PE", "shape": "코너형", "user_type": "주거약자", "delta": 30000})
-    rows.append({"material": "PP/PE", "shape": "사각형", "user_type": "주거약자", "delta": 40000})
+    rows.append(
+        {"material": "PP/PE", "shape": "코너형", "user_type": "일반", "delta": 0}
+    )
+    rows.append(
+        {"material": "PP/PE", "shape": "사각형", "user_type": "일반", "delta": 10000}
+    )
+    rows.append(
+        {
+            "material": "PP/PE",
+            "shape": "코너형",
+            "user_type": "주거약자",
+            "delta": 30000,
+        }
+    )
+    rows.append(
+        {
+            "material": "PP/PE",
+            "shape": "사각형",
+            "user_type": "주거약자",
+            "delta": 40000,
+        }
+    )
 
     return pd.DataFrame(rows)
 
@@ -434,7 +426,9 @@ def load_tables_from_excel(file) -> tuple:
     if "설치비 내역_수량(GRP, FRP)" in sheet_names:
         # 1) GRP/FRP 요약
         grp_summary = pd.read_excel(xls, "설치비 내역_수량(GRP, FRP)", header=None)
-        base_grp, vehicles_tbl, region_names, area_rules_grp, meals_std = _parse_grp_summary_250905(grp_summary)
+        base_grp, vehicles_tbl, region_names, area_rules_grp, meals_std = (
+            _parse_grp_summary_250905(grp_summary)
+        )
 
         # 2) PP/PE 요약
         ppe_summary = pd.read_excel(xls, "설치비 내역_수량(PP,PE)", header=None)
@@ -443,7 +437,7 @@ def load_tables_from_excel(file) -> tuple:
         # 3) 면적 보정 규칙 통합
         area_rules = {
             "GRP": area_rules_grp,
-            "FRP": area_rules_grp,   # FRP는 GRP와 동일 취급
+            "FRP": area_rules_grp,  # FRP는 GRP와 동일 취급
             "PP/PE": area_rules_ppe,
         }
 
@@ -454,8 +448,12 @@ def load_tables_from_excel(file) -> tuple:
         adjust_tbl = _make_adjust_default_table()
 
         # 6) 세부 설치비 카탈로그
-        detail_grp = _build_detail_from_250905(pd.read_excel(xls, "세부 설치비 내역(GRP)"))
-        detail_ppe = _build_detail_from_250905(pd.read_excel(xls, "세부 설치비 내역(PP,PE)"))
+        detail_grp = _build_detail_from_250905(
+            pd.read_excel(xls, "세부 설치비 내역(GRP)")
+        )
+        detail_ppe = _build_detail_from_250905(
+            pd.read_excel(xls, "세부 설치비 내역(PP,PE)")
+        )
         detail_catalogs = {"GRP": detail_grp, "PP/PE": detail_ppe}
 
         return (
@@ -469,18 +467,22 @@ def load_tables_from_excel(file) -> tuple:
             detail_catalogs,
         )
     else:
-        raise ValueError("지원하지 않는 엑셀 포맷입니다. 250905_시스템욕실 설치비 내역서 형식인지 확인하세요.")
+        raise ValueError(
+            "지원하지 않는 엑셀 포맷입니다. 250905_시스템욕실 설치비 내역서 형식인지 확인하세요."
+        )
 
 
 def make_empty_tables() -> tuple:
     """엑셀을 아직 업로드하지 않았을 때 사용할 빈 기본 구조."""
-    empty_base = pd.DataFrame({"bucket": BUCKETS, "base_price": [0]*len(BUCKETS)})
-    empty_adjust = pd.DataFrame(columns=["material","shape","user_type","delta"])
-    empty_vehicles = pd.DataFrame({
-        "bucket": BUCKETS,
-        "vehicles": [0]*len(BUCKETS),
-        "fuel_per_vehicle": [0]*len(BUCKETS),
-    })
+    empty_base = pd.DataFrame({"bucket": BUCKETS, "base_price": [0] * len(BUCKETS)})
+    empty_adjust = pd.DataFrame(columns=["material", "shape", "user_type", "delta"])
+    empty_vehicles = pd.DataFrame(
+        {
+            "bucket": BUCKETS,
+            "vehicles": [0] * len(BUCKETS),
+            "fuel_per_vehicle": [0] * len(BUCKETS),
+        }
+    )
     empty_oji = pd.DataFrame({"region": []})
     empty_area_rules: Dict[str, Dict[str, Any]] = {}
     empty_meals = {
@@ -503,6 +505,7 @@ def make_empty_tables() -> tuple:
         empty_detail_catalogs,
     )
 
+
 # 세션 기본값 초기화
 if "tables" not in st.session_state:
     st.session_state.tables = make_empty_tables()
@@ -512,8 +515,17 @@ if "config_filename" not in st.session_state:
     st.session_state.config_filename = None
 
 # 세션에 저장된 테이블 언팩
-(base_grp, base_ppe, adjust_tbl, area_rules,
- vehicles_tbl, oji_tbl, meals_std, detail_catalogs) = st.session_state.tables
+(
+    base_grp,
+    base_ppe,
+    adjust_tbl,
+    area_rules,
+    vehicles_tbl,
+    oji_tbl,
+    meals_std,
+    detail_catalogs,
+) = st.session_state.tables
+
 
 # ------------------------------
 # 계산용 함수들 (Base/보정/세부설치비)
@@ -532,24 +544,29 @@ def pick_base(material: str, bucket: str) -> Tuple[int, str]:
     base = int(row["base_price"].iloc[0])
     return base, f"{mat} / {bucket} Base"
 
-def shape_adjust(material: str, shape: str, user_type: str, adjust_tbl: pd.DataFrame) -> int:
+
+def shape_adjust(
+    material: str, shape: str, user_type: str, adjust_tbl: pd.DataFrame
+) -> int:
     mat = material.upper()
     row = adjust_tbl[
-        (adjust_tbl["material"].str.upper()==mat) &
-        (adjust_tbl["shape"]==shape) &
-        (adjust_tbl["user_type"]==user_type)
+        (adjust_tbl["material"].str.upper() == mat)
+        & (adjust_tbl["shape"] == shape)
+        & (adjust_tbl["user_type"] == user_type)
     ]
     if row.empty:
         return 0
     return int(row["delta"].iloc[0])
 
+
 def fuel_surcharge(bucket: str, vehicles_tbl: pd.DataFrame) -> int:
-    row = vehicles_tbl.loc[vehicles_tbl["bucket"]==bucket]
+    row = vehicles_tbl.loc[vehicles_tbl["bucket"] == bucket]
     if row.empty:
         return 0
     v = float(row["vehicles"].iloc[0])
     cost = float(row["fuel_per_vehicle"].iloc[0])
     return int(v * cost)
+
 
 def meals_amount(meals_std: Dict[str, Any]) -> int:
     """
@@ -562,10 +579,13 @@ def meals_amount(meals_std: Dict[str, Any]) -> int:
     days = int(meals_std.get("days", 0))
     return int(crew * (meal + lodge) * days)
 
-def detail_cost(material: str, bucket: str, detail_catalogs: Dict[str, pd.DataFrame]) -> Tuple[int, List[str]]:
+
+def detail_cost(
+    material: str, bucket: str, detail_catalogs: Dict[str, pd.DataFrame]
+) -> Tuple[int, List[str]]:
     logs: List[str] = []
     mat = material.upper()
-    cat_key = "PP/PE" if mat=="PP/PE" else "GRP"
+    cat_key = "PP/PE" if mat == "PP/PE" else "GRP"
     df = detail_catalogs.get(cat_key, pd.DataFrame()).copy()
     if df.empty:
         return 0, ["세부설치비 카탈로그 없음"]
@@ -576,7 +596,7 @@ def detail_cost(material: str, bucket: str, detail_catalogs: Dict[str, pd.DataFr
     if bucket not in df.columns:
         return 0, [f"카탈로그에 {bucket} 버킷 단가 컬럼이 없습니다."]
 
-    use = df[df["적용"]==True].copy()
+    use = df[df["적용"] == True].copy()
     if use.empty:
         return 0, ["적용된 세부설치비 항목 없음"]
 
@@ -586,75 +606,39 @@ def detail_cost(material: str, bucket: str, detail_catalogs: Dict[str, pd.DataFr
     subtotal = int(use["금액"].sum())
     logs.append(f"세부설치비(선택 합계): {fmt_money(subtotal)}")
     # 모든 항목 로그 출력
-    for r in use[["품목","사양","규격","수량","단가","금액"]].to_dict(orient="records"):
+    for r in use[["품목", "사양", "규격", "수량", "단가", "금액"]].to_dict(
+        orient="records"
+    ):
         q = int(r["수량"]) if float(r["수량"]).is_integer() else r["수량"]
-        logs.append(f"  - {r['품목']} / {r['사양']} / {r.get('규격','')}: {q} × {fmt_money(r['단가'])} = {fmt_money(r['금액'])}")
+        logs.append(
+            f"  - {r['품목']} / {r['사양']} / {r.get('규격','')}: {q} × {fmt_money(r['단가'])} = {fmt_money(r['금액'])}"
+        )
     return subtotal, logs
+
 
 def compute():
     """
     세대당 인건비와 로그, breakdown 반환.
     - 기준설치비 = Base + 형상/세대/재질 보정 + 면적 보정
-    - 코너형의 경우: 규격코드 그룹별 단가 적용
     - 숙식비(세대당) 별도 가산
     - (오지일 경우) 유류비 별도 가산
-    - 기타경비 별도 가산
     - 세부설치비(세대당)는 '참고용'만 표시, 계산에는 미포함
     """
     logs: List[str] = []
 
     # 1) 기준설치비 구성
-    # 코너형의 경우 면적 기반 단가 그룹 또는 직접 입력 단가 적용
-    corner_spec_adj = 0
-    base_group1 = CORNER_AREA_GROUPS[0]  # 그룹1 (기준)
-    if shape == "코너형":
-        if corner_custom_price > 0:
-            # 단가 직접 입력 모드
-            base, base_note = pick_base(material, bucket)
-            # 직접 입력된 단가와 기본 그룹1의 차이를 보정값으로 적용
-            if units >= 300:
-                base_group1_price = base_group1["price_over_300"]
-            else:
-                base_group1_price = base_group1["price_under_300"]
-            corner_spec_adj = corner_custom_price - base_group1_price
-            logs.append(f"코너형 단가 직접 입력: {fmt_money(corner_custom_price)}")
-            logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
-            logs.append(f"코너형 단가 보정: 그룹1 기준 대비 {fmt_money(corner_spec_adj)}")
-        elif corner_spec_group is not None:
-            # 면적 기반 그룹 매칭 모드
-            group_info = corner_spec_group  # 이미 dict 형태
-            # 300세대 기준으로 단가 결정
-            if units >= 300:
-                corner_base = group_info.get("price_over_300", 0)
-                logs.append(f"코너형 면적그룹: {group_info['name']} ({group_info['label']}) (300세대↑) → 기준단가 {fmt_money(corner_base)}")
-            else:
-                corner_base = group_info.get("price_under_300", 0)
-                logs.append(f"코너형 면적그룹: {group_info['name']} ({group_info['label']}) (300세대↓) → 기준단가 {fmt_money(corner_base)}")
-
-            # 기존 Base와의 차이를 보정값으로 적용
-            base, base_note = pick_base(material, bucket)
-            if units >= 300:
-                base_group1_price = base_group1["price_over_300"]
-            else:
-                base_group1_price = base_group1["price_under_300"]
-            corner_spec_adj = corner_base - base_group1_price
-            logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
-            if corner_spec_adj != 0:
-                logs.append(f"코너형 면적그룹 보정: 그룹1 대비 +{fmt_money(corner_spec_adj)}")
-        else:
-            base, base_note = pick_base(material, bucket)
-            logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
-    else:
-        base, base_note = pick_base(material, bucket)
-        logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
+    base, base_note = pick_base(material, bucket)
+    logs.append(f"Base 선택: {base_note} → {fmt_money(base)}")
 
     delta_shape = shape_adjust(material, shape, user_type, adjust_tbl)
-    logs.append(f"형상/세대/재질 보정: {material}, {shape}, {user_type} → {fmt_money(delta_shape)}")
+    logs.append(
+        f"형상/세대/재질 보정: {material}, {shape}, {user_type} → {fmt_money(delta_shape)}"
+    )
 
     d_area = area_adjust(material, area, area_rules)
     logs.append(f"면적 보정: 면적={area:.2f}㎡ → {fmt_money(d_area)}")
 
-    base_install = base + delta_shape + d_area + corner_spec_adj
+    base_install = base + delta_shape + d_area
     logs.append(f"기준설치비 합계(세대당): {fmt_money(base_install)}")
 
     # 2) 숙식비 (기준단가에 포함되지 않음 → 항상 추가)
@@ -667,7 +651,7 @@ def compute():
     )
 
     subtotal = base_install + meals_info
-    logs.append(f"기준단가 합계(세대당, 유류비/기타경비 제외): {fmt_money(subtotal)}")
+    logs.append(f"기준단가 합계(세대당, 유류비 제외): {fmt_money(subtotal)}")
 
     # 3) 제주 예외 처리
     fuel = 0
@@ -675,15 +659,12 @@ def compute():
         logs.append("제주: 별도 산정 (자동 계산 중단)")
         breakdown = {
             "base_raw": base,
-            "corner_spec_adj": corner_spec_adj,
             "shape_adj": delta_shape,
             "area_adj": d_area,
             "base_install": base_install,
             "meals": meals_info,
             "subtotal_ex_fuel": subtotal,
             "fuel": 0,
-            "other_expenses": other_expenses,
-            "other_expenses_note": other_expenses_note,
             "detail_per_unit": 0,
             "final": None,
         }
@@ -697,51 +678,56 @@ def compute():
         logs.append("유류비 추가비: 미적용 (외곽/오지 아님)")
 
     # 5) 기타경비
-    if other_expenses > 0:
-        note_str = f" ({other_expenses_note})" if other_expenses_note else ""
-        logs.append(f"기타경비(세대당): {fmt_money(other_expenses)}{note_str}")
-    else:
-        logs.append("기타경비: 없음")
+    logs.append(f"기타경비(세대당): {fmt_money(other_expense)}")
 
     # 6) 세부 설치비 (프로젝트 전체 → 세대당 환산) - 참고용만, 계산에는 미포함
     d_detail, dlogs = detail_cost(material, bucket, detail_catalogs)
     logs.extend(dlogs)
     detail_per_unit = d_detail / max(units, 1)
-    logs.append(f"세부설치비(세대당 환산, 참고용/계산 미포함): {fmt_money(detail_per_unit)}")
+    logs.append(
+        f"세부설치비(세대당 환산, 참고용/계산 미포함): {fmt_money(detail_per_unit)}"
+    )
 
-    # ⚠ 최종 인건비 계산에서 세부설치비는 제외, 기타경비는 포함
-    final_price = subtotal + fuel + other_expenses
+    # ⚠ 최종 인건비 계산에서 세부설치비는 제외
+    final_price = subtotal + fuel + other_expense
 
     logs.append(f"최종 세대당 인건비(세부설치비 미포함): {fmt_money(final_price)}")
 
     breakdown = {
         "base_raw": base,
-        "corner_spec_adj": corner_spec_adj,
         "shape_adj": delta_shape,
         "area_adj": d_area,
         "base_install": base_install,
         "meals": meals_info,
         "subtotal_ex_fuel": subtotal,
         "fuel": fuel,
-        "other_expenses": other_expenses,
-        "other_expenses_note": other_expenses_note,
+        "other_expense": other_expense,  # 기타경비
         "detail_per_unit": detail_per_unit,  # 참고용
         "final": final_price,
     }
 
     return int(round(final_price)), logs, breakdown
 
+
 # ------------------------------
 # Sidebar: 입력조건
 # ------------------------------
 with st.sidebar:
     st.header("설치비 설정 엑셀")
-    cfg_file = st.file_uploader("labor_cost_defaults.xlsx 업로드", type=["xlsx","xls"])
+    cfg_file = st.file_uploader("labor_cost_defaults.xlsx 업로드", type=["xlsx", "xls"])
     if cfg_file is not None:
         try:
             tables = load_tables_from_excel(cfg_file)
-            (base_grp, base_ppe, adjust_tbl, area_rules,
-             vehicles_tbl, oji_tbl, meals_std, detail_catalogs) = tables
+            (
+                base_grp,
+                base_ppe,
+                adjust_tbl,
+                area_rules,
+                vehicles_tbl,
+                oji_tbl,
+                meals_std,
+                detail_catalogs,
+            ) = tables
             st.session_state.tables = tables
             st.session_state.config_loaded = True
             st.session_state.config_filename = cfg_file.name
@@ -767,130 +753,35 @@ with st.sidebar:
         index=0,
         horizontal=True,
     )
+
+    # 내부 계산용 코드는 기존처럼 "일반" / "주거약자" 문자열 사용
     user_type = "일반" if user_type_label.startswith("일반") else "주거약자"
-
-    # ★ 코너형/사각형에 따라 규격코드 입력 방식 분리
-    corner_spec_group = None
-    corner_custom_price = 0
-    corner_total_area = 0.0
-    corner_panel_codes = []  # 바닥판 규격코드 목록
-    corner_panel_areas = []  # 바닥판 면적 목록
-
-    if shape == "코너형":
-        # 코너형: 바닥판 여러 개 규격코드 입력
-        st.markdown("##### 바닥판 규격 입력")
-        st.caption("코너형은 전체 바닥판 면적 합계에 따라 단가가 달라집니다.")
-
-        corner_input_mode = st.radio(
-            "입력 방식",
-            ["규격코드 입력", "단가 직접 입력"],
-            index=0,
-            horizontal=True,
-        )
-
-        if corner_input_mode == "규격코드 입력":
-            # 바닥판 개수 선택
-            if "corner_panel_count" not in st.session_state:
-                st.session_state.corner_panel_count = 2  # 기본 2개
-
-            panel_count = st.number_input(
-                "바닥판 개수",
-                min_value=1,
-                max_value=10,
-                value=st.session_state.corner_panel_count,
-                step=1,
-                key="corner_panel_count_input"
-            )
-            st.session_state.corner_panel_count = panel_count
-
-            panel_count = st.session_state.corner_panel_count
-
-            # 각 바닥판 규격코드 입력
-            for i in range(panel_count):
-                code_val = st.text_input(
-                    f"바닥판{i+1} 규격코드",
-                    value="1520" if i == 0 else "",
-                    key=f"corner_panel_{i}",
-                    help="예: 1520, 1621 등"
-                )
-                panel_area = parse_code_to_area(code_val) if code_val else 0.0
-                corner_panel_codes.append(code_val)
-                corner_panel_areas.append(panel_area)
-
-            # 전체 면적 합계
-            corner_total_area = sum(corner_panel_areas)
-            area = corner_total_area  # 면적 보정용
-
-            # 면적 요약 표시
-            area_parts = [f"{a:.2f}" for a in corner_panel_areas if a > 0]
-            if len(area_parts) > 1:
-                st.info(f"**전체 면적: {' + '.join(area_parts)} = {corner_total_area:.2f}㎡**")
-            else:
-                st.info(f"**전체 면적: {corner_total_area:.2f}㎡**")
-
-            # 면적으로 단가 그룹 매칭
-            matched_group = get_corner_group_by_area(corner_total_area)
-            corner_spec_group = matched_group
-            st.success(f"매칭 그룹: {matched_group['name']} ({matched_group['label']}) - {matched_group['area_min']}~{matched_group['area_max']}㎡")
-            if units >= 300:
-                st.caption(f"기준단가(300세대↑): {matched_group['price_over_300']:,}원")
-            else:
-                st.caption(f"기준단가(300세대↓): {matched_group['price_under_300']:,}원")
-
-            # 그룹 수동 선택 옵션
-            manual_select = st.checkbox("그룹 수동 선택", value=False)
-            if manual_select:
-                group_options = [f"{g['name']} ({g['label']}) - {g['area_min']}~{g['area_max']}㎡" for g in CORNER_AREA_GROUPS]
-                selected_idx = st.selectbox("단가 그룹", range(len(group_options)), format_func=lambda x: group_options[x])
-                corner_spec_group = CORNER_AREA_GROUPS[selected_idx]
-                if units >= 300:
-                    st.caption(f"선택 기준단가(300세대↑): {corner_spec_group['price_over_300']:,}원")
-                else:
-                    st.caption(f"선택 기준단가(300세대↓): {corner_spec_group['price_under_300']:,}원")
-
-            # 규격코드 변수 설정 (결과 표시용)
-            code = "/".join([c for c in corner_panel_codes if c])
-        else:
-            # 단가 직접 입력
-            corner_custom_price = st.number_input(
-                "코너형 단가 직접 입력 (원)",
-                min_value=0,
-                step=10000,
-                value=350000,
-                help="코너형 기준단가를 직접 입력합니다."
-            )
-            st.info(f"입력된 단가: {corner_custom_price:,}원")
-            # 면적은 수동 입력
-            code = st.text_input("규격 코드 (참고용)", value="1520")
-            area = st.number_input("면적(㎡)", value=float(parse_code_to_area(code)), help="면적 보정에 사용됩니다.")
-    else:
-        # 사각형: 기존 단일 규격코드 입력
-        code = st.text_input("규격 코드 (예: 1520, 1623...)", value="1520")
-        area = st.number_input("면적(㎡)", value=float(parse_code_to_area(code)), help="규격코드에서 자동 계산값. 수동 수정 가능.")
-    region = st.selectbox("지역", ["수도권", "지방", "제주"], index=0)
-    is_oji = st.checkbox("외곽/오지 지역 여부", value=False, help="강화도/고성/통영/거제/남해/고흥/완도/진도/신안 등")
-
-    # ★ 기타경비 입력
-    st.markdown("---")
-    st.markdown("##### 기타경비")
-    other_expenses = st.number_input(
-        "기타경비 (원/세대)",
-        min_value=0,
-        step=1000,
-        value=0,
-        help="추가로 반영할 기타 경비를 입력하세요. 결과에 포함됩니다."
+    code = st.text_input("규격 코드 (예: 1520, 1623...)", value="1520")
+    area = st.number_input(
+        "면적(㎡)",
+        value=float(parse_code_to_area(code)),
+        help="규격코드에서 자동 계산값. 수동 수정 가능.",
     )
-    other_expenses_note = st.text_input(
-        "기타경비 비고",
-        value="",
-        help="기타경비에 대한 설명 (예: 특수장비 대여, 야간작업 수당 등)"
+    region = st.selectbox("지역", ["수도권", "지방", "제주"], index=0)
+    is_oji = st.checkbox(
+        "외곽/오지 지역 여부",
+        value=False,
+        help="강화도/고성/통영/거제/남해/고흥/완도/진도/신안 등",
     )
 
     # ★ 식대·숙박비 포함 여부 (합계(세대) 기준단가)
     include_meals = st.checkbox(
         "식대·숙박비 포함 합계(세대) 기준단가",
         value=True,
-        help="체크 시 crew·식대·숙박비·일수를 반영한 숙식비를 세대당 인건비에 포함합니다."
+        help="체크 시 crew·식대·숙박비·일수를 반영한 숙식비를 세대당 인건비에 포함합니다.",
+    )
+
+    other_expense = st.number_input(
+        "기타경비(세대당, 원)",
+        min_value=0,
+        step=1000,
+        value=0,
+        help="세대당 추가 기타경비",
     )
 
     bucket = get_bucket(int(units))
@@ -909,10 +800,17 @@ with st.sidebar:
 # ------------------------------
 # Main Tabs
 # ------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "① 버킷별 기준단가", "② 형상/세대/재질 보정", "③ 면적 보정", "④ 외곽/오지·유류비",
-    "⑤ 숙식비 설정", "⑥ 결과/근거 로그", "⑦ 세부설치비 선택(카탈로그)"
-])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+    [
+        "① 버킷별 기준단가",
+        "② 형상/세대/재질 보정",
+        "③ 면적 보정",
+        "④ 외곽/오지·유류비",
+        "⑤ 숙식비 설정",
+        "⑥ 결과/근거 로그",
+        "⑦ 세부설치비 선택(카탈로그)",
+    ]
+)
 
 # ------------------------------
 # ① 버킷별 기준단가
@@ -923,22 +821,35 @@ with tab1:
     with c1:
         st.markdown("**GRP (코너·일반 Base)**")
         base_grp = st.data_editor(
-            base_grp, num_rows="fixed", use_container_width=True,
+            base_grp,
+            num_rows="fixed",
+            use_container_width=True,
             column_config={
                 "bucket": st.column_config.TextColumn("세대수 구간", disabled=True),
                 "base_price": st.column_config.NumberColumn("GRP Base", step=10000),
-            }
+            },
         )
     with c2:
         st.markdown("**PP/PE (코너·일반 Base)**")
         base_ppe = st.data_editor(
-            base_ppe, num_rows="fixed", use_container_width=True,
+            base_ppe,
+            num_rows="fixed",
+            use_container_width=True,
             column_config={
                 "bucket": st.column_config.TextColumn("세대수 구간", disabled=True),
                 "base_price": st.column_config.NumberColumn("PP/PE Base", step=10000),
-            }
+            },
         )
-    st.session_state.tables = (base_grp, base_ppe, adjust_tbl, area_rules, vehicles_tbl, oji_tbl, meals_std, detail_catalogs)
+    st.session_state.tables = (
+        base_grp,
+        base_ppe,
+        adjust_tbl,
+        area_rules,
+        vehicles_tbl,
+        oji_tbl,
+        meals_std,
+        detail_catalogs,
+    )
 
 # ------------------------------
 # ② 형상/세대/재질 보정
@@ -950,13 +861,24 @@ with tab2:
         use_container_width=True,
         num_rows="dynamic",
         column_config={
-            "material": st.column_config.SelectboxColumn(options=["GRP","FRP","PP/PE"]),
-            "shape": st.column_config.SelectboxColumn(options=["코너형","사각형"]),
-            "user_type": st.column_config.SelectboxColumn(options=["일반","주거약자"]),
+            "material": st.column_config.SelectboxColumn(
+                options=["GRP", "FRP", "PP/PE"]
+            ),
+            "shape": st.column_config.SelectboxColumn(options=["코너형", "사각형"]),
+            "user_type": st.column_config.SelectboxColumn(options=["일반", "주거약자"]),
             "delta": st.column_config.NumberColumn("보정금액(원)", step=5000),
-        }
+        },
     )
-    st.session_state.tables = (base_grp, base_ppe, adjust_tbl, area_rules, vehicles_tbl, oji_tbl, meals_std, detail_catalogs)
+    st.session_state.tables = (
+        base_grp,
+        base_ppe,
+        adjust_tbl,
+        area_rules,
+        vehicles_tbl,
+        oji_tbl,
+        meals_std,
+        detail_catalogs,
+    )
 
 # ------------------------------
 # ③ 면적 보정
@@ -965,30 +887,85 @@ with tab3:
     st.subheader("면적 보정 (경계 포함)")
     c1, c2, c3 = st.columns(3)
     with c1:
-        rule = area_rules.get("GRP", {"min":2.5,"max":2.9,"delta_below":-30000,"delta_above":30000})
-        grp_min = st.number_input("GRP 기준 하한(㎡)", value=float(rule["min"]), step=0.1, format="%.1f")
-        grp_max = st.number_input("GRP 기준 상한(㎡)", value=float(rule["max"]), step=0.1, format="%.1f")
-        grp_below = st.number_input("GRP 하한 미만 가산(원)", value=int(rule["delta_below"]), step=1000)
-        grp_above = st.number_input("GRP 상한 초과 가산(원)", value=int(rule["delta_above"]), step=1000)
+        rule = area_rules.get(
+            "GRP", {"min": 2.5, "max": 2.9, "delta_below": -30000, "delta_above": 30000}
+        )
+        grp_min = st.number_input(
+            "GRP 기준 하한(㎡)", value=float(rule["min"]), step=0.1, format="%.1f"
+        )
+        grp_max = st.number_input(
+            "GRP 기준 상한(㎡)", value=float(rule["max"]), step=0.1, format="%.1f"
+        )
+        grp_below = st.number_input(
+            "GRP 하한 미만 가산(원)", value=int(rule["delta_below"]), step=1000
+        )
+        grp_above = st.number_input(
+            "GRP 상한 초과 가산(원)", value=int(rule["delta_above"]), step=1000
+        )
     with c2:
-        rule = area_rules.get("PP/PE", {"min":2.5,"max":3.0,"delta_below":-30000,"delta_above":30000})
-        ppe_min = st.number_input("PP/PE 기준 하한(㎡)", value=float(rule["min"]), step=0.1, format="%.1f")
-        ppe_max = st.number_input("PP/PE 기준 상한(㎡)", value=float(rule["max"]), step=0.1, format="%.1f")
-        ppe_below = st.number_input("PP/PE 하한 미만 가산(원)", value=int(rule["delta_below"]), step=1000)
-        ppe_above = st.number_input("PP/PE 상한 초과 가산(원)", value=int(rule["delta_above"]), step=1000)
+        rule = area_rules.get(
+            "PP/PE",
+            {"min": 2.5, "max": 3.0, "delta_below": -30000, "delta_above": 30000},
+        )
+        ppe_min = st.number_input(
+            "PP/PE 기준 하한(㎡)", value=float(rule["min"]), step=0.1, format="%.1f"
+        )
+        ppe_max = st.number_input(
+            "PP/PE 기준 상한(㎡)", value=float(rule["max"]), step=0.1, format="%.1f"
+        )
+        ppe_below = st.number_input(
+            "PP/PE 하한 미만 가산(원)", value=int(rule["delta_below"]), step=1000
+        )
+        ppe_above = st.number_input(
+            "PP/PE 상한 초과 가산(원)", value=int(rule["delta_above"]), step=1000
+        )
     with c3:
-        rule = area_rules.get("FRP", {"min":2.5,"max":2.9,"delta_below":-30000,"delta_above":30000})
-        frp_min = st.number_input("FRP 기준 하한(㎡)", value=float(rule["min"]), step=0.1, format="%.1f")
-        frp_max = st.number_input("FRP 기준 상한(㎡)", value=float(rule["max"]), step=0.1, format="%.1f")
-        frp_below = st.number_input("FRP 하한 미만 가산(원)", value=int(rule["delta_below"]), step=1000)
-        frp_above = st.number_input("FRP 상한 초과 가산(원)", value=int(rule["delta_above"]), step=1000)
+        rule = area_rules.get(
+            "FRP", {"min": 2.5, "max": 2.9, "delta_below": -30000, "delta_above": 30000}
+        )
+        frp_min = st.number_input(
+            "FRP 기준 하한(㎡)", value=float(rule["min"]), step=0.1, format="%.1f"
+        )
+        frp_max = st.number_input(
+            "FRP 기준 상한(㎡)", value=float(rule["max"]), step=0.1, format="%.1f"
+        )
+        frp_below = st.number_input(
+            "FRP 하한 미만 가산(원)", value=int(rule["delta_below"]), step=1000
+        )
+        frp_above = st.number_input(
+            "FRP 상한 초과 가산(원)", value=int(rule["delta_above"]), step=1000
+        )
 
     area_rules = {
-        "GRP":{"min":grp_min,"max":grp_max,"delta_below":grp_below,"delta_above":grp_above},
-        "PP/PE":{"min":ppe_min,"max":ppe_max,"delta_below":ppe_below,"delta_above":ppe_above},
-        "FRP":{"min":frp_min,"max":frp_max,"delta_below":frp_below,"delta_above":frp_above},
+        "GRP": {
+            "min": grp_min,
+            "max": grp_max,
+            "delta_below": grp_below,
+            "delta_above": grp_above,
+        },
+        "PP/PE": {
+            "min": ppe_min,
+            "max": ppe_max,
+            "delta_below": ppe_below,
+            "delta_above": ppe_above,
+        },
+        "FRP": {
+            "min": frp_min,
+            "max": frp_max,
+            "delta_below": frp_below,
+            "delta_above": frp_above,
+        },
     }
-    st.session_state.tables = (base_grp, base_ppe, adjust_tbl, area_rules, vehicles_tbl, oji_tbl, meals_std, detail_catalogs)
+    st.session_state.tables = (
+        base_grp,
+        base_ppe,
+        adjust_tbl,
+        area_rules,
+        vehicles_tbl,
+        oji_tbl,
+        meals_std,
+        detail_catalogs,
+    )
 
 # ------------------------------
 # ④ 외곽/오지 유류비
@@ -1002,12 +979,23 @@ with tab4:
         column_config={
             "bucket": st.column_config.TextColumn("세대수 구간", disabled=True),
             "vehicles": st.column_config.NumberColumn("차량대수", step=0.5),
-            "fuel_per_vehicle": st.column_config.NumberColumn("차량당 유류비(원)", step=5000),
-        }
+            "fuel_per_vehicle": st.column_config.NumberColumn(
+                "차량당 유류비(원)", step=5000
+            ),
+        },
     )
     st.markdown("**외곽/오지 지역 리스트 (참고용)**")
     st.dataframe(oji_tbl, use_container_width=True)
-    st.session_state.tables = (base_grp, base_ppe, adjust_tbl, area_rules, vehicles_tbl, oji_tbl, meals_std, detail_catalogs)
+    st.session_state.tables = (
+        base_grp,
+        base_ppe,
+        adjust_tbl,
+        area_rules,
+        vehicles_tbl,
+        oji_tbl,
+        meals_std,
+        detail_catalogs,
+    )
 
 # ------------------------------
 # ⑤ 숙식비 설정
@@ -1016,12 +1004,38 @@ with tab5:
     st.subheader("숙식비 설정 (기준단가에 미포함, 별도 가산)")
     c1, c2 = st.columns(2)
     with c1:
-        meals_std["crew_count"] = st.number_input("crew 인원 수", min_value=0, step=1, value=int(meals_std.get("crew_count", 4)))
-        meals_std["days"] = st.number_input("세대당 숙식 일수", min_value=0, step=1, value=int(meals_std.get("days", 1)))
+        meals_std["crew_count"] = st.number_input(
+            "crew 인원 수",
+            min_value=0,
+            step=1,
+            value=int(meals_std.get("crew_count", 4)),
+        )
+        meals_std["days"] = st.number_input(
+            "세대당 숙식 일수", min_value=0, step=1, value=int(meals_std.get("days", 1))
+        )
     with c2:
-        meals_std["meal_unit"] = st.number_input("1인 1일 식대(원)", min_value=0, step=1000, value=int(meals_std.get("meal_unit", 10000)))
-        meals_std["lodging_unit"] = st.number_input("1인 1일 숙박비(원)", min_value=0, step=1000, value=int(meals_std.get("lodging_unit", 25000)))
-    st.session_state.tables = (base_grp, base_ppe, adjust_tbl, area_rules, vehicles_tbl, oji_tbl, meals_std, detail_catalogs)
+        meals_std["meal_unit"] = st.number_input(
+            "1인 1일 식대(원)",
+            min_value=0,
+            step=1000,
+            value=int(meals_std.get("meal_unit", 10000)),
+        )
+        meals_std["lodging_unit"] = st.number_input(
+            "1인 1일 숙박비(원)",
+            min_value=0,
+            step=1000,
+            value=int(meals_std.get("lodging_unit", 25000)),
+        )
+    st.session_state.tables = (
+        base_grp,
+        base_ppe,
+        adjust_tbl,
+        area_rules,
+        vehicles_tbl,
+        oji_tbl,
+        meals_std,
+        detail_catalogs,
+    )
 
 # ------------------------------
 # ⑥ 결과/근거 로그
@@ -1054,35 +1068,17 @@ with tab6:
             area_range_str = "-"
 
         cond_rows = [
-            {"항목":"재질", "값": material},
-            {"항목":"형상", "값": shape},
-            {"항목":"세대유형", "값": user_type},
-            {"항목":"세대수", "값": int(units)},
-            {"항목":"버킷", "값": bucket},
-            {"항목":"규격코드", "값": code},
-            {"항목":"면적(㎡)", "값": f"{area:.2f}"},
-            {"항목":"면적 기준범위(㎡)", "값": area_range_str},
-            {"항목":"지역", "값": region},
-            {"항목":"외곽/오지", "값": "예" if is_oji else "아니오"},
+            {"항목": "재질", "값": material},
+            {"항목": "형상", "값": shape},
+            {"항목": "세대유형", "값": user_type},
+            {"항목": "세대수", "값": int(units)},
+            {"항목": "버킷", "값": bucket},
+            {"항목": "규격코드", "값": code},
+            {"항목": "면적(㎡)", "값": f"{area:.2f}"},
+            {"항목": "면적 기준범위(㎡)", "값": area_range_str},
+            {"항목": "지역", "값": region},
+            {"항목": "외곽/오지", "값": "예" if is_oji else "아니오"},
         ]
-        # 코너형인 경우 규격 그룹 또는 직접입력 단가 정보 추가
-        if shape == "코너형":
-            if corner_custom_price > 0:
-                cond_rows.append({"항목":"코너형 단가(직접입력)", "값": f"{corner_custom_price:,}원"})
-            elif corner_spec_group is not None:
-                # 바닥판 상세 정보
-                panel_details = []
-                for i, (c, a) in enumerate(zip(corner_panel_codes, corner_panel_areas)):
-                    if c:
-                        panel_details.append(f"{c}({a:.2f}㎡)")
-                if panel_details:
-                    cond_rows.append({"항목":"코너형 바닥판", "값": " + ".join(panel_details)})
-                cond_rows.append({"항목":"코너형 전체면적", "값": f"{corner_total_area:.2f}㎡"})
-                cond_rows.append({"항목":"코너형 면적그룹", "값": f"{corner_spec_group['name']} ({corner_spec_group['label']})"})
-        # 기타경비 정보 추가
-        if other_expenses > 0:
-            note_str = f" ({other_expenses_note})" if other_expenses_note else ""
-            cond_rows.append({"항목":"기타경비", "값": f"{other_expenses:,}원{note_str}"})
         cond_df = pd.DataFrame(cond_rows)
         st.table(cond_df)
 
@@ -1090,35 +1086,63 @@ with tab6:
         st.markdown("### ② 비용 요약 (세대당)")
 
         base_install = breakdown.get("base_install", None)
-        corner_spec_adj = breakdown.get("corner_spec_adj", 0)
         meals_cost = breakdown.get("meals", None)
         fuel_cost = breakdown.get("fuel", None)
         subtotal_ex_fuel = breakdown.get("subtotal_ex_fuel", None)
         detail_per_unit = breakdown.get("detail_per_unit", None)
-        other_exp = breakdown.get("other_expenses", 0)
-        other_exp_note = breakdown.get("other_expenses_note", "")
         final_price = breakdown.get("final", result)
 
         summary_rows = []
-        # 코너형 면적그룹 보정이 있는 경우 비고에 표시
-        base_note = "Base + 형상/세대/재질 보정 + 면적 보정"
-        if corner_spec_adj != 0:
-            base_note += f" + 코너형 면적그룹 보정({fmt_money(corner_spec_adj)})"
         if base_install is not None:
-            summary_rows.append({"항목":"기준설치비", "금액(원)": fmt_money(base_install), "비고": base_note})
+            summary_rows.append(
+                {
+                    "항목": "기준설치비",
+                    "금액(원)": fmt_money(base_install),
+                    "비고": "Base + 형상/세대/재질 보정 + 면적 보정",
+                }
+            )
         if meals_cost is not None:
-            summary_rows.append({"항목":"숙식비", "금액(원)": fmt_money(meals_cost), "비고":"기준단가에 미포함, 별도 가산"})
+            summary_rows.append(
+                {
+                    "항목": "숙식비",
+                    "금액(원)": fmt_money(meals_cost),
+                    "비고": "기준단가에 미포함, 별도 가산",
+                }
+            )
         if subtotal_ex_fuel is not None:
-            summary_rows.append({"항목":"기준단가 합계", "금액(원)": fmt_money(subtotal_ex_fuel), "비고":"유류비/기타경비 제외"})
+            summary_rows.append(
+                {
+                    "항목": "기준단가 합계",
+                    "금액(원)": fmt_money(subtotal_ex_fuel),
+                    "비고": "유류비 제외",
+                }
+            )
         if fuel_cost is not None and fuel_cost != 0:
-            summary_rows.append({"항목":"유류비 추가비", "금액(원)": fmt_money(fuel_cost), "비고":"외곽/오지일 경우"})
-        # 기타경비 표시
-        if other_exp > 0:
-            other_note = other_exp_note if other_exp_note else "사용자 지정"
-            summary_rows.append({"항목":"기타경비", "금액(원)": fmt_money(other_exp), "비고": other_note})
+            summary_rows.append(
+                {
+                    "항목": "유류비 추가비",
+                    "금액(원)": fmt_money(fuel_cost),
+                    "비고": "외곽/오지일 경우",
+                }
+            )
+        other_expense_val = breakdown.get("other_expense", 0)
+        if other_expense_val is not None and other_expense_val != 0:
+            summary_rows.append(
+                {
+                    "항목": "기타경비",
+                    "금액(원)": fmt_money(other_expense_val),
+                    "비고": "세대당",
+                }
+            )
         # 세부설치비(세대당)는 계산에 포함되지 않으므로 요약 표에서는 제외
         if final_price is not None:
-            summary_rows.append({"항목":"최종 세대당 인건비", "금액(원)": fmt_money(final_price), "비고":""})
+            summary_rows.append(
+                {
+                    "항목": "최종 세대당 인건비",
+                    "금액(원)": fmt_money(final_price),
+                    "비고": "",
+                }
+            )
 
         if summary_rows:
             summary_df = pd.DataFrame(summary_rows)
@@ -1150,27 +1174,35 @@ with tab6:
 with tab7:
     st.subheader("세부설치비 선택 (엑셀 카탈로그)")
     # 재질 선택에 따라 해당 카탈로그 사용 (FRP는 GRP 기반 보정이므로 GRP 카탈로그 사용)
-    cat_key = "PP/PE" if material.upper() in ["PP/PE","PPPE","PPE"] else "GRP"
+    cat_key = "PP/PE" if material.upper() in ["PP/PE", "PPPE", "PPE"] else "GRP"
     catalog_df = detail_catalogs.get(cat_key, pd.DataFrame()).copy()
 
     if catalog_df.empty:
-        st.error("카탈로그가 비어 있습니다. 엑셀 설정 파일의 detail_catalog_* 시트를 확인하세요.")
+        st.error(
+            "카탈로그가 비어 있습니다. 엑셀 설정 파일의 detail_catalog_* 시트를 확인하세요."
+        )
     else:
-        st.caption(f"사용 중인 카탈로그: **{cat_key}**  |  세대수 버킷: **{bucket}**  |  항목 수: {len(catalog_df)}")
+        st.caption(
+            f"사용 중인 카탈로그: **{cat_key}**  |  세대수 버킷: **{bucket}**  |  항목 수: {len(catalog_df)}"
+        )
 
         items = ["(전체)"] + sorted(catalog_df["품목"].dropna().unique().tolist())
         pick_item = st.selectbox("품목", items, index=0)
-        filtered = catalog_df if pick_item == "(전체)" else catalog_df[catalog_df["품목"]==pick_item]
+        filtered = (
+            catalog_df
+            if pick_item == "(전체)"
+            else catalog_df[catalog_df["품목"] == pick_item]
+        )
 
         specs = ["(전체)"] + sorted(filtered["사양"].dropna().unique().tolist())
         pick_spec = st.selectbox("사양", specs, index=0)
         if pick_spec != "(전체)":
-            filtered = filtered[filtered["사양"]==pick_spec]
+            filtered = filtered[filtered["사양"] == pick_spec]
 
         sizes = ["(전체)"] + sorted(filtered["규격"].dropna().unique().tolist())
         pick_size = st.selectbox("규격", sizes, index=0)
         if pick_size != "(전체)":
-            filtered = filtered[filtered["규격"]==pick_size]
+            filtered = filtered[filtered["규격"] == pick_size]
 
         if "적용" not in filtered.columns:
             filtered["적용"] = True
@@ -1180,29 +1212,46 @@ with tab7:
             num_rows="dynamic",
             column_config={
                 "적용": st.column_config.CheckboxColumn(),
-            }
+            },
         )
         # 여기서는 단순히 편집된 카탈로그를 다시 저장
         detail_catalogs[cat_key] = edited
-        st.session_state.tables = (base_grp, base_ppe, adjust_tbl, area_rules, vehicles_tbl, oji_tbl, meals_std, detail_catalogs)
+        st.session_state.tables = (
+            base_grp,
+            base_ppe,
+            adjust_tbl,
+            area_rules,
+            vehicles_tbl,
+            oji_tbl,
+            meals_std,
+            detail_catalogs,
+        )
 
 # ------------------------------
 # 디버그 JSON
 # ------------------------------
 import json
+
 with st.expander("디버그용 JSON 보기", expanded=False):
-    st.code(json.dumps({
-        "입력조건": {
-            "세대수": int(units),
-            "버킷": bucket,
-            "재질": material,
-            "형상": shape,
-            "세대유형": user_type,
-            "규격코드": code,
-            "면적": area,
-            "지역": region,
-            "외곽오지": bool(is_oji),
-            "Base소스": "2025 세부표 사용 (숙식비 미포함)",
-        },
-        "meals_std": meals_std,
-    }, ensure_ascii=False, indent=2), language="json")
+    st.code(
+        json.dumps(
+            {
+                "입력조건": {
+                    "세대수": int(units),
+                    "버킷": bucket,
+                    "재질": material,
+                    "형상": shape,
+                    "세대유형": user_type,
+                    "규격코드": code,
+                    "면적": area,
+                    "지역": region,
+                    "외곽오지": bool(is_oji),
+                    "Base소스": "2025 세부표 사용 (숙식비 미포함)",
+                },
+                "meals_std": meals_std,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        language="json",
+    )

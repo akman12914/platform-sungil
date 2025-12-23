@@ -563,6 +563,15 @@ if not uploaded:
     st.info("왼쪽에서 엑셀 파일(시트: **바닥판**, **PVE**)을 업로드한 뒤 **계산하기**를 눌러주세요. (※ **시공비** 시트는 있으면 호환용으로 추가 참고)")
     st.stop()
 
+# --- 엑셀 파일 비교 및 선택 ---
+from excel_compare import render_excel_comparison_ui
+
+# 모든 시트 비교 (바닥판 계산이 첫 진입점이므로 여기서 전체 비교)
+ALL_TARGET_SHEETS = ["바닥판", "바닥판단가", "천장판", "천장판타공", "자재단가내역", "벽판", "PVE"]
+
+# 비교 UI 렌더링 (이전 파일과 비교, 선택에 따라 file_bytes 반환)
+file_bytes = render_excel_comparison_ui(uploaded, ALL_TARGET_SHEETS, page_name="floor")
+
 # 엑셀 파일을 세션에 저장 (다른 페이지에서 재사용)
 if uploaded is not None:
     st.session_state[SHARED_EXCEL_KEY] = uploaded
@@ -570,8 +579,6 @@ if uploaded is not None:
 
 # 엑셀 로딩 (캐시된 파싱 사용)
 try:
-    uploaded.seek(0)  # 파일 포인터를 처음으로 리셋
-    file_bytes = uploaded.read()
     df, pve_costs, pve_process_cost_legacy = load_floor_panel_data(file_bytes)
 except ValueError as e:
     st.error(f"필수 시트 누락: {e} — 엑셀에 '바닥판' 및 'PVE' 시트가 있는지 확인하세요.")

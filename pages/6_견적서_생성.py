@@ -18,6 +18,10 @@ CEIL_RESULT_KEY = "ceil_result"
 SAVED_QUOTATIONS_KEY = "saved_quotations"  # 저장된 세대 타입별 견적 목록 (최대 10개)
 PROD_MGMT_SETTINGS_KEY = "prod_mgmt_settings"  # 생산관리비 설정
 
+# 공유 엑셀 파일 키 (바닥판에서 업로드)
+SHARED_EXCEL_KEY = "shared_excel_file"
+SHARED_EXCEL_NAME_KEY = "shared_excel_filename"
+
 # 생산관리비 기본 카테고리 정의 (품목+사양 단위로 세부 지정)
 # items: [(품목, 사양패턴), ...] - 사양패턴이 None이면 해당 품목 전체, 문자열이면 contains 매칭
 DEFAULT_PROD_MGMT_CATEGORIES = {
@@ -486,10 +490,27 @@ ceiling_data = convert_ceiling_data(ceil_result)
 
 # Sidebar: Pricebook upload
 with st.sidebar:
-    st.markdown("### ① 단가표 업로드")
-    pricebook_file = st.file_uploader(
-        "Sungil_DB2_new.xlsx (시트명: 자재단가내역)", type=["xlsx"]
+    st.markdown("### ① 단가표")
+
+    # 바닥판에서 공유된 엑셀 파일 확인
+    shared_excel = st.session_state.get(SHARED_EXCEL_KEY)
+    shared_excel_name = st.session_state.get(SHARED_EXCEL_NAME_KEY, "")
+
+    # 파일 소스 선택
+    use_shared = st.checkbox(
+        f"바닥판 공유 파일 사용 ({shared_excel_name})" if shared_excel else "바닥판 공유 파일 사용 (없음)",
+        value=shared_excel is not None,
+        disabled=shared_excel is None
     )
+
+    pricebook_file = None
+    if use_shared and shared_excel:
+        pricebook_file = shared_excel
+        st.success(f"공유 파일: {shared_excel_name}")
+    else:
+        pricebook_file = st.file_uploader(
+            "별도 업로드 (시트: 자재단가내역)", type=["xlsx"]
+        )
 
     st.markdown("---")
     st.markdown("### ② 계산 결과 (자동 연동)")
@@ -508,7 +529,10 @@ price_df: Optional[pd.DataFrame] = None
 ceiling_drilling_prices: Dict[str, float] = {}
 if pricebook_file is not None:
     try:
+        # 파일 포인터를 처음으로 리셋 후 읽기
+        pricebook_file.seek(0)
         file_bytes = pricebook_file.read()
+        pricebook_file.seek(0)  # 다른 곳에서 재사용할 수 있도록 다시 리셋
         price_df = load_pricebook_from_excel(file_bytes)
         ceiling_drilling_prices = load_ceiling_drilling_prices(file_bytes)
         st.sidebar.success(f"단가표 로드 완료: {len(price_df)}행")

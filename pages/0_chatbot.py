@@ -5,6 +5,7 @@ import os
 import tempfile
 import shutil
 import re
+import json
 import streamlit as st
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
@@ -153,6 +154,20 @@ if "last_index_batch_docs" not in st.session_state:
     st.session_state["last_index_batch_docs"] = []
 if "last_index_summary" not in st.session_state:
     st.session_state["last_index_summary"] = None
+
+# ═══════════════════════════════════════════════════════════════
+# 품목 탐지 관련 상태
+# ═══════════════════════════════════════════════════════════════
+AI_DETECTED_ITEMS_KEY = "ai_detected_items"        # AI 추출 품목
+AI_COMPARISON_RESULT_KEY = "ai_comparison_result"  # 비교 결과
+AI_PENDING_ITEMS_KEY = "ai_pending_items"          # 추가 대기 품목
+
+if AI_DETECTED_ITEMS_KEY not in st.session_state:
+    st.session_state[AI_DETECTED_ITEMS_KEY] = []
+if AI_COMPARISON_RESULT_KEY not in st.session_state:
+    st.session_state[AI_COMPARISON_RESULT_KEY] = None
+if AI_PENDING_ITEMS_KEY not in st.session_state:
+    st.session_state[AI_PENDING_ITEMS_KEY] = []
 
 # ---------------------------------------
 # 사이드바: 모델/옵션
@@ -521,6 +536,284 @@ def make_batch_summary(docs, model="gpt-5-mini"):
     return rendered
 
 
+# ═══════════════════════════════════════════════════════════════
+# 품목 탐지 기능
+# ═══════════════════════════════════════════════════════════════
+
+# 현재 견적서에서 사용하는 품목 정의 (6_견적서_생성.py에서 가져옴)
+KNOWN_ITEMS = {
+    # 고정 수량 품목
+    "엘보(Φ100)", "엘보(Φ50)", "오수구덮개", "PVC접착제", "양변기",
+    "PVC 4방문틀", "ABS 문짝", "도어하드웨어", "가틀", "본틀",
+    "레일 및 뎀퍼", "오목손잡이 및 문틀받침대", "세면기 수전", "샤워수전",
+    "슬라이드바", "은경(거울)", "수건걸이", "휴지걸이", "일자유리선반",
+    "코너선반", "욕실등", "원형등", "사각등", "원형 매립등", "환풍기홀",
+    "사각매립등", "원형등 타공", "직선 1회", "실리콘(내항균성)",
+    "실리콘(외장용)", "우레탄폼", "이면지지클립", "타일 평탄클립", "에폭시 접착제",
+    # 바닥판 종류별 품목
+    "직관(Φ100)", "직관(Φ50)", "배수트랩(습식용)", "배수트랩(상하용)",
+    "드레인커버(세면부)", "드레인커버(샤워부)", "양변기(오수구) 소켓(Φ100)",
+    "세면,바닥,샤워 배수세트(Φ175)", "난방배관 소켓(Φ16)", "클럽메쉬 세트(클립포함)",
+    "벽체코너 받침대", "볼트", "성형슬리브(오수)Φ125", "성형슬리브(세면,바닥,샤워)Φ175",
+    "슬리브용 몰탈막음 스펀지", "코너마감재", "코너비드",
+    # 선택 품목
+    "PB 독립배관", "PB 세대 세트 배관", "PB+이중관(오픈수전함)",
+    "긴다리 세면기", "반다리 세면기", "욕실장(일반형)", "PS장(600*900)",
+    "슬라이딩 욕실장", "샤워부스", "샤워파티션", "SQ욕조", "세라믹 욕조",
+    "환풍기", "후렉시블 호스, 서스밴드", "도어스토퍼", "손끼임방지",
+    "청소건", "레인 샤워수전", "선반형 레인 샤워수전", "세탁기 수전",
+    "매립형 휴지걸이", "청소솔", "2단 수건선반", "천장 매립등(사각)",
+    "천장 매립등(원형)", "벽부등",
+    # 주거약자 관련 품목
+    "손잡이(L자형)", "손잡이(I자형)", "접이식 의자", "고령자용 손잡이",
+}
+
+ITEM_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """너는 욕실(UBR) 공사 시방서에서 필요한 품목을 추출하는 전문가다.
+문서에서 명시적으로 언급된 품목만 추출하고, 추측하지 마라.
+특히 주거약자세대, 장애인 편의시설 관련 품목에 주의하라."""
+    ),
+    (
+        "human",
+        """다음 시방서에서 욕실 공사에 필요한 품목을 추출하라.
+
+## 추출 카테고리:
+- 배관류: 엘보, 직관, 배수트랩, 드레인커버, 슬리브
+- 도기류: 양변기, 세면기
+- 수전류: 세면기수전, 샤워수전, 슬라이드바, 레인샤워수전
+- 문세트: 문틀, 문짝, 도어하드웨어, 포켓도어
+- 액세서리: 거울, 수건걸이, 휴지걸이, 선반
+- 환기류: 환풍기, 후렉시블호스
+- 칸막이/욕조
+- 주거약자 품목: 손잡이(L자형/I자형), 접이식 의자, 안전바
+- 기타: 실리콘, 우레탄폼 등
+
+## 출력 형식 (반드시 JSON):
+```json
+{{
+  "items": [
+    {{"name": "품목명", "spec": "사양/규격", "qty": 수량또는null, "required": true/false, "source": "원문 인용(30자 이내)"}}
+  ],
+  "special_requirements": ["특이사항1", "특이사항2"]
+}}
+```
+
+## 주의사항:
+- 문서에 명시된 품목만 추출 (추측 금지)
+- required는 "필수", "반드시", "설치해야" 등 표현이 있으면 true
+- 수량이 불명확하면 qty는 null
+- source는 해당 품목이 언급된 원문의 핵심 부분 인용
+
+[시방서 내용]
+{context}
+"""
+    )
+])
+
+
+def extract_items_from_pdf(docs: list, model: str = "gpt-5-mini") -> list:
+    """PDF 문서에서 품목 추출"""
+    if not docs:
+        return []
+
+    # 문서 내용 결합 (최신 문서 우선으로 정렬)
+    sorted_docs = sorted(
+        docs,
+        key=lambda d: d.metadata.get("timestamp", ""),
+        reverse=True
+    )
+
+    # 각 문서에서 샘플 추출 (너무 길면 자름)
+    content_parts = []
+    for d in sorted_docs[:5]:  # 최대 5개 문서
+        text = d.page_content.strip()[:2000]
+        source = d.metadata.get("display_name", "문서")
+        content_parts.append(f"[{source}]\n{text}")
+
+    context = "\n\n---\n\n".join(content_parts)[:6000]
+
+    llm = ChatOpenAI(model=model, temperature=0)
+    chain = ITEM_EXTRACTION_PROMPT | llm
+
+    try:
+        response = chain.invoke({"context": context})
+
+        # JSON 파싱
+        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response.content)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # JSON 블록 없이 바로 JSON인 경우
+            json_match = re.search(r'\{[\s\S]*\}', response.content)
+            if json_match:
+                json_str = json_match.group()
+            else:
+                return []
+
+        result = json.loads(json_str)
+        return result.get("items", [])
+    except Exception as e:
+        st.error(f"품목 추출 오류: {e}")
+        return []
+
+
+def get_all_current_items() -> set:
+    """현재 견적서에서 사용 중인 모든 품목명 반환"""
+    return KNOWN_ITEMS
+
+
+def compare_with_detected(detected_items: list, current_items: set) -> dict:
+    """탐지된 품목과 현재 품목 비교"""
+    to_add = []
+    matched = []
+
+    current_lower = {item.lower() for item in current_items}
+
+    for item in detected_items:
+        item_name = item.get("name", "")
+        item_name_lower = item_name.lower()
+
+        # 유사도 매칭 (부분 일치 포함)
+        is_matched = False
+        for curr in current_lower:
+            if item_name_lower in curr or curr in item_name_lower:
+                is_matched = True
+                break
+
+        if is_matched:
+            matched.append(item_name)
+        else:
+            to_add.append({
+                "name": item_name,
+                "spec": item.get("spec", ""),
+                "qty": item.get("qty"),
+                "required": item.get("required", False),
+                "source": item.get("source", ""),
+                "priority": "high" if item.get("required") else "medium"
+            })
+
+    return {
+        "to_add": to_add,
+        "matched": matched,
+        "summary": f"총 {len(detected_items)}개 품목 중 {len(matched)}개 일치, {len(to_add)}개 추가 검토 필요"
+    }
+
+
+def add_to_pending_items(item: dict):
+    """품목을 추가 대기 목록에 추가"""
+    pending = st.session_state.get(AI_PENDING_ITEMS_KEY, [])
+    # 중복 체크
+    existing_names = {p.get("name", "").lower() for p in pending}
+    if item.get("name", "").lower() not in existing_names:
+        pending.append(item)
+        st.session_state[AI_PENDING_ITEMS_KEY] = pending
+        return True
+    return False
+
+
+# 견적 포함 문장 세션 키
+AI_QUOTE_SENTENCES_KEY = "ai_quote_sentences"
+
+# 견적 관련 키워드 패턴
+QUOTE_KEYWORDS = [
+    "견적에 포함",
+    "견적 포함",
+    "견적포함",
+    "견적내 포함",
+    "견적 내 포함",
+    "단가에 포함",
+    "단가 포함",
+    "공사비에 포함",
+    "공사비 포함",
+    "비용에 포함",
+    "비용 포함",
+    "금액에 포함",
+    "금액 포함",
+]
+
+
+def extract_quote_sentences(docs: list, model: str = "gpt-5-mini") -> list:
+    """문서에서 '견적에 포함' 관련 문장을 추출하고, 해당 문장에서 품목명을 추출"""
+    if not docs:
+        return []
+
+    # 모든 문서 텍스트 합치기
+    all_text = "\n".join([d.page_content for d in docs])
+
+    # 견적 관련 문장 찾기
+    sentences = []
+    lines = all_text.split("\n")
+
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+
+        # 키워드 매칭
+        for keyword in QUOTE_KEYWORDS:
+            if keyword in line_stripped:
+                sentences.append(line_stripped)
+                break
+
+    if not sentences:
+        return []
+
+    # AI로 문장에서 품목 추출 (개선된 프롬프트)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """너는 건설 시방서에서 '견적에 포함해야 할 실제 자재/품목'을 추출하는 전문가다.
+주의:
+- '전기', '통신', '기계설비' 같은 공정명/분야명은 품목이 아니다.
+- '협의', '작업', '착수' 같은 행위는 품목이 아니다.
+- 실제로 구매하거나 설치해야 하는 자재/부품만 품목이다.
+- 예: 코킹, 창호, 실리콘, 우레탄폼, 배수트랩 등이 품목이다."""),
+        ("human", """다음 문장들에서 '견적에 포함해야 할 실제 품목(자재/부품)'을 추출하라.
+
+## 판단 기준:
+- 실제로 구매/설치해야 하는 자재인가? → 품목 O
+- 공정명, 분야명, 작업명인가? → 품목 X
+- "~의 코킹", "~용 실리콘" 처럼 구체적 자재인가? → 품목 O
+
+## 문장들:
+{sentences}
+
+## 출력 형식 (JSON):
+```json
+[
+  {{"sentence": "원문 문장", "items": ["구체적 품목명"], "context": "어떤 상황에서 필요한지 설명"}}
+]
+```
+
+품목이 없거나 공정명만 있는 문장은 items를 빈 리스트로 반환하라.
+""")
+    ])
+
+    llm = ChatOpenAI(model=model, temperature=0)
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({"sentences": "\n".join(f"- {s}" for s in sentences[:20])})  # 최대 20개
+
+        # JSON 파싱
+        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response.content)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            json_match = re.search(r'\[[\s\S]*\]', response.content)
+            if json_match:
+                json_str = json_match.group()
+            else:
+                return []
+
+        result = json.loads(json_str)
+        # items가 있는 것만 반환
+        return [r for r in result if r.get("items")]
+    except Exception as e:
+        st.error(f"견적 문장 분석 오류: {e}")
+        return []
+
+
 # ---------------------------------------
 # 업로더/인덱서
 # ---------------------------------------
@@ -558,12 +851,35 @@ with col_a:
 
             st.success(f"인덱스 생성 완료! (청크 수: {len(chunks)})")
 
+            # 🔹 품목 자동 탐지
+            with st.spinner("품목 자동 탐지 중..."):
+                detected = extract_items_from_pdf(raw_docs, model=model_name)
+                current = get_all_current_items()
+                comparison = compare_with_detected(detected, current)
+                st.session_state[AI_DETECTED_ITEMS_KEY] = detected
+                st.session_state[AI_COMPARISON_RESULT_KEY] = comparison
+
+            # 🔹 '견적에 포함' 문장 추출
+            with st.spinner("'견적에 포함' 문장 분석 중..."):
+                quote_sentences = extract_quote_sentences(raw_docs, model=model_name)
+                st.session_state[AI_QUOTE_SENTENCES_KEY] = quote_sentences
+
+            if comparison and comparison.get("to_add"):
+                st.info(f"📋 {comparison['summary']}")
+
+            if quote_sentences:
+                st.warning(f"📝 '견적에 포함' 관련 문장 {len(quote_sentences)}개 발견!")
+
 with col_b:
     if st.button("🗑 인덱스 초기화", use_container_width=True):
         st.session_state["vectorstore"] = None
         st.session_state["chat_history"] = []
         st.session_state["last_index_batch_docs"] = []
         st.session_state["last_index_summary"] = None
+        st.session_state[AI_DETECTED_ITEMS_KEY] = []
+        st.session_state[AI_COMPARISON_RESULT_KEY] = None
+        st.session_state[AI_PENDING_ITEMS_KEY] = []
+        st.session_state[AI_QUOTE_SENTENCES_KEY] = []
         st.success("초기화 완료.")
 
 # ---------------------------------------
@@ -889,3 +1205,69 @@ if st.session_state["chat_history"]:
     for i, (qq, aa) in enumerate(reversed(st.session_state["chat_history"][-8:]), 1):
         st.markdown(f"**Q{i}.** {qq}")
         st.markdown(f"**A{i}.** {aa}")
+
+# ═══════════════════════════════════════════════════════════════
+# 3) 품목 자동 탐지 결과
+# ═══════════════════════════════════════════════════════════════
+st.markdown("---")
+st.subheader("3) 품목 자동 탐지 결과")
+
+comparison = st.session_state.get(AI_COMPARISON_RESULT_KEY)
+if comparison:
+    st.markdown(f"**{comparison.get('summary', '')}**")
+
+    # 추가 필요 품목
+    to_add = comparison.get("to_add", [])
+    if to_add:
+        st.markdown("#### 추가 검토 필요 품목")
+        for idx, item in enumerate(to_add):
+            col1, col2, col3, col4 = st.columns([2, 3, 1, 1])
+            with col1:
+                priority_icon = "🔴" if item.get("priority") == "high" else "🟡"
+                st.write(f"{priority_icon} **{item.get('name', '')}**")
+            with col2:
+                source_text = item.get("source", "")
+                if source_text:
+                    st.write(f"📄 {source_text[:50]}{'...' if len(source_text) > 50 else ''}")
+                else:
+                    st.write("-")
+            with col3:
+                qty = item.get("qty")
+                st.write(f"수량: {qty if qty else '-'}")
+            with col4:
+                if st.button("추가", key=f"chatbot_add_{idx}_{item.get('name', '')}"):
+                    if add_to_pending_items(item):
+                        st.success(f"'{item.get('name')}' 추가됨")
+                        st.rerun()
+                    else:
+                        st.warning("이미 추가됨")
+
+        # 일괄 추가 버튼
+        st.markdown("---")
+        col_bulk1, col_bulk2 = st.columns(2)
+        with col_bulk1:
+            if st.button("📥 모두 추가 대기", use_container_width=True, type="primary"):
+                added_count = 0
+                for item in to_add:
+                    if add_to_pending_items(item):
+                        added_count += 1
+                st.success(f"{added_count}개 품목이 추가 대기 목록에 추가됨")
+                st.rerun()
+
+    # 일치 품목
+    matched = comparison.get("matched", [])
+    if matched:
+        with st.expander(f"✅ 기존 품목과 일치 ({len(matched)}개)"):
+            st.write(", ".join(matched))
+
+    # 추가 대기 목록 표시
+    pending = st.session_state.get(AI_PENDING_ITEMS_KEY, [])
+    if pending:
+        st.markdown("---")
+        st.markdown(f"#### 📋 추가 대기 목록 ({len(pending)}개)")
+        st.info("견적서 생성 페이지에서 최종 추가할 수 있습니다.")
+        for p in pending:
+            qty_str = f"(수량: {p.get('qty')})" if p.get('qty') else ""
+            st.write(f"• {p.get('name', '')} {qty_str}")
+else:
+    st.info("시방서 PDF를 업로드하고 인덱스를 생성하면 품목이 자동 탐지됩니다.")

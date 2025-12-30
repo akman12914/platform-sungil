@@ -2,6 +2,7 @@
 # session_state 연동 버전 - 바닥/벽/천장 계산 결과를 자동으로 가져옵니다.
 
 from common_styles import apply_common_styles, set_page_config
+from common_sidebar import render_chatbot_sidebar
 import auth
 
 import json
@@ -100,6 +101,9 @@ set_page_config(page_title="욕실 견적서 생성기", layout="wide")
 apply_common_styles()
 
 auth.require_auth()
+
+# 사이드바에 시방서 분석 결과 표시
+render_chatbot_sidebar()
 
 # ----------------------------
 # Helper Functions
@@ -768,6 +772,108 @@ def calculate_auto_items(floor_type: str, shape_type: str) -> Dict[str, float]:
     return items
 
 # ═══════════════════════════════════════════════════════════════
+# AI 품목 탐지 결과 (챗봇에서 탐지된 결과 표시)
+# ═══════════════════════════════════════════════════════════════
+AI_COMPARISON_RESULT_KEY = "ai_comparison_result"
+AI_PENDING_ITEMS_KEY = "ai_pending_items"
+
+st.markdown("---")
+st.subheader("AI 품목 자동 탐지")
+
+comparison = st.session_state.get(AI_COMPARISON_RESULT_KEY)
+pending_items = st.session_state.get(AI_PENDING_ITEMS_KEY, [])
+
+if comparison or pending_items:
+    if comparison:
+        st.markdown(f"**{comparison.get('summary', '')}**")
+
+    # 추가 대기 품목 표시
+    if pending_items:
+        st.markdown("#### 📋 추가 대기 품목")
+        for idx, item in enumerate(pending_items):
+            col1, col2, col3 = st.columns([3, 1.5, 0.5])
+            with col1:
+                st.write(f"• **{item.get('name', '')}** - {item.get('source', '')[:40] if item.get('source') else ''}")
+            with col2:
+                # 수량 입력 필드 (기본값 1)
+                new_qty = st.number_input(
+                    "수량",
+                    min_value=1,
+                    value=item.get("qty") or 1,
+                    key=f"qty_pending_{idx}_{item.get('name', '')}",
+                    label_visibility="collapsed"
+                )
+                # 수량 변경 시 반영
+                if new_qty != item.get("qty"):
+                    pending_items[idx]["qty"] = new_qty
+                    st.session_state[AI_PENDING_ITEMS_KEY] = pending_items
+            with col3:
+                if st.button("🗑", key=f"est_del_{idx}_{item.get('name', '')}"):
+                    pending_items.pop(idx)
+                    st.session_state[AI_PENDING_ITEMS_KEY] = pending_items
+                    st.rerun()
+
+        st.markdown("---")
+        col_add1, col_add2 = st.columns(2)
+        with col_add1:
+            if st.button("✅ 모두 견적서에 추가", use_container_width=True, type="primary"):
+                # CUSTOM_ITEMS에 추가
+                custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
+                added_count = 0
+                for item in pending_items:
+                    # 중복 체크
+                    existing_names = [c.get("name", "").lower() for c in custom_items]
+                    if item.get("name", "").lower() not in existing_names:
+                        custom_items.append({
+                            "category": "AI탐지",
+                            "name": item.get("name", ""),
+                            "spec": item.get("spec", ""),
+                            "qty": item.get("qty") or 1,
+                            "source": "AI_DETECTED"
+                        })
+                        added_count += 1
+                st.session_state[CUSTOM_ITEMS_KEY] = custom_items
+                st.session_state[AI_PENDING_ITEMS_KEY] = []
+                st.success(f"✅ {added_count}개 품목이 견적서에 추가되었습니다!")
+                st.rerun()
+        with col_add2:
+            if st.button("🗑 대기 목록 비우기", use_container_width=True):
+                st.session_state[AI_PENDING_ITEMS_KEY] = []
+                st.rerun()
+
+    # 추가 검토 필요 품목 (아직 대기 목록에 없는 것들)
+    if comparison:
+        to_add = comparison.get("to_add", [])
+        pending_names = {p.get("name", "").lower() for p in pending_items}
+        remaining = [item for item in to_add if item.get("name", "").lower() not in pending_names]
+
+        if remaining:
+            with st.expander(f"📝 추가 검토 필요 품목 ({len(remaining)}개)", expanded=False):
+                for idx, item in enumerate(remaining):
+                    col1, col2, col3 = st.columns([3.5, 1.5, 1])
+                    with col1:
+                        priority_icon = "🔴" if item.get("priority") == "high" else "🟡"
+                        st.write(f"{priority_icon} {item.get('name', '')} - {item.get('source', '')[:30] if item.get('source') else ''}")
+                    with col2:
+                        # 수량 입력 필드 (기본값 1)
+                        review_qty = st.number_input(
+                            "수량",
+                            min_value=1,
+                            value=item.get("qty") or 1,
+                            key=f"qty_review_{idx}_{item.get('name', '')}",
+                            label_visibility="collapsed"
+                        )
+                    with col3:
+                        if st.button("추가", key=f"est_review_add_{idx}_{item.get('name', '')}"):
+                            item_to_add = item.copy()
+                            item_to_add["qty"] = review_qty
+                            pending_items.append(item_to_add)
+                            st.session_state[AI_PENDING_ITEMS_KEY] = pending_items
+                            st.rerun()
+else:
+    st.info("📋 챗봇 페이지에서 시방서 PDF를 업로드하고 인덱스를 생성하면 품목이 자동 탐지됩니다.")
+
+# ═══════════════════════════════════════════════════════════════
 # UI: 바닥판 종류 및 형태 선택
 # ═══════════════════════════════════════════════════════════════
 st.markdown("---")
@@ -949,6 +1055,56 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
                 col_idx += 1
 
     st.session_state[AUTO_ITEMS_KEY] = edited_items
+
+    # ═══════════════════════════════════════════════════════════════
+    # '견적에 포함' 문장에서 품목 추가
+    # ═══════════════════════════════════════════════════════════════
+    quote_sentences = st.session_state.get("ai_quote_sentences", [])
+    if quote_sentences:
+        st.divider()
+        st.markdown("### 📝 '견적에 포함' 문장에서 품목 추가")
+        st.caption("시방서에서 '견적에 포함'으로 명시된 항목입니다. 품목명을 입력하여 추가하세요.")
+
+        for idx, sent in enumerate(quote_sentences):
+            with st.container():
+                st.info(f"**문장:** {sent.get('sentence', '')}")
+                if sent.get('context'):
+                    st.caption(f"상황: {sent.get('context', '')}")
+
+                # AI가 추출한 품목 제안
+                suggested_items = sent.get('items', [])
+                col1, col2, col3 = st.columns([2, 1, 1])
+                with col1:
+                    # 제안된 품목 또는 직접 입력
+                    default_name = suggested_items[0] if suggested_items else ""
+                    item_name = st.text_input(
+                        "품목명",
+                        value=default_name,
+                        key=f"quote_item_{idx}",
+                        placeholder="품목명 입력"
+                    )
+                with col2:
+                    item_qty = st.number_input(
+                        "수량",
+                        min_value=1,
+                        value=1,
+                        key=f"quote_qty_{idx}"
+                    )
+                with col3:
+                    if st.button("추가", key=f"quote_add_{idx}", use_container_width=True):
+                        if item_name.strip():
+                            custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
+                            custom_items.append({
+                                "category": "견적포함",
+                                "name": item_name.strip(),
+                                "qty": item_qty,
+                                "source": sent.get('sentence', '')[:50]
+                            })
+                            st.session_state[CUSTOM_ITEMS_KEY] = custom_items
+                            st.success(f"'{item_name}' 추가됨!")
+                            st.rerun()
+                        else:
+                            st.warning("품목명을 입력하세요.")
 
     # ═══════════════════════════════════════════════════════════════
     # 사용자 정의 품목 추가

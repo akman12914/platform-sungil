@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 # --- Common Styles ---
 from common_styles import apply_common_styles, set_page_config
+from common_sidebar import render_chatbot_sidebar
 
 # --- Authentication ---
 import auth
@@ -30,6 +31,9 @@ import auth
 set_page_config(page_title="천장판 계산 프로그램 (통합)", layout="wide")
 apply_common_styles()
 auth.require_auth()
+
+# 사이드바에 시방서 분석 결과 표시
+render_chatbot_sidebar()
 
 # =========================================
 # Session State Keys

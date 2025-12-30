@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 # --- Common Styles ---
 from common_styles import apply_common_styles, set_page_config
+from common_sidebar import render_chatbot_sidebar
 
 # --- Authentication ---
 import auth
@@ -24,6 +25,9 @@ import auth
 set_page_config(page_title="벽판 규격/개수 산출", layout="wide")
 apply_common_styles()
 auth.require_auth()
+
+# 사이드바에 시방서 분석 결과 표시
+render_chatbot_sidebar()
 
 # =========================================
 # Session State Keys (공유 데이터)

@@ -12,6 +12,7 @@ import streamlit as st
 
 # --- Common Styles ---
 from common_styles import apply_common_styles, set_page_config
+from common_sidebar import render_chatbot_sidebar
 
 # --- Authentication ---
 import auth
@@ -22,6 +23,9 @@ import auth
 set_page_config(page_title="인건비 계산", layout="wide")
 apply_common_styles()
 auth.require_auth()
+
+# 사이드바에 시방서 분석 결과 표시
+render_chatbot_sidebar()
 
 st.title("인건비 계산")
 

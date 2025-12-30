@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw
 
 # --- Common Styles ---
 from common_styles import apply_common_styles, set_page_config
+from common_sidebar import render_chatbot_sidebar
 
 # --- Authentication ---
 import auth
@@ -26,6 +27,9 @@ import auth
 set_page_config(page_title="바닥판 계산 프로그램 (통합)", layout="wide")
 apply_common_styles()
 auth.require_auth()
+
+# 사이드바에 시방서 분석 결과 표시
+render_chatbot_sidebar()
 
 # =========================================
 # Session State Keys
@@ -74,6 +78,15 @@ st.title("바닥판 계산 프로그램 (통합)")
 with st.sidebar:
     st.header("① 데이터 업로드")
     uploaded = st.file_uploader("엑셀 업로드 (필수 시트: '바닥판', 'PVE' / 선택: '시공비')", type=["xlsx", "xls"])
+
+    # 공사특기조건 PDF 업로드 (시방서 Q&A 챗봇과 공유)
+    st.markdown("---")
+    st.markdown("**📋 공사특기조건 PDF (선택)**")
+    spec_pdf = st.file_uploader("공사특기조건 PDF 업로드", type=["pdf"], key="floor_spec_pdf")
+    if spec_pdf:
+        st.session_state["floor_spec_pdf_name"] = spec_pdf.name
+        st.success(f"✅ {spec_pdf.name} 업로드됨")
+        st.caption("→ 챗봇 페이지에서 인덱스 생성 시 품목 탐지에 활용됩니다.")
 
     st.header("② 기본 입력")
     units = st.number_input("시공 세대수", min_value=1, step=1, value=100)

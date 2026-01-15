@@ -1695,6 +1695,92 @@ with bath_col1:
 with bath_col2:
     st.markdown(" ")  # 빈 공간
 
+# ============================================
+# L/R 품목 수량 별도 지정
+# ============================================
+st.markdown("---")
+st.subheader("품목별 좌/우 수량 별도 지정")
+st.caption("L/R 구분이 필요한 품목의 좌/우 수량을 별도로 지정할 수 있습니다. 지정하지 않으면 기본 수량이 사용됩니다.")
+
+# L/R 수량 지정을 위한 session state 초기화
+if "lr_quantity_override" not in st.session_state:
+    st.session_state["lr_quantity_override"] = {}
+
+# L/R 품목 목록 표시
+lr_items_to_configure = []
+
+# 저장된 견적에서 L/R 구분 가능한 품목 찾기
+saved_quotations = st.session_state.get(SAVED_QUOTATIONS_KEY, [])
+for q in saved_quotations:
+    for row in q.get("rows", []):
+        품목 = _clean_value(row.get("품목", "")).strip()
+        if 품목 in LR_REQUIRED_ITEMS:
+            사양 = _clean_value(row.get("사양 및 규격", "")).strip()
+            수량 = float(row.get("수량", 0) or 0)
+            lr_items_to_configure.append({
+                "품목": 품목,
+                "사양": 사양,
+                "수량": 수량
+            })
+
+if lr_items_to_configure:
+    st.info(f"총 {len(lr_items_to_configure)}개의 L/R 구분 가능 품목이 발견되었습니다.")
+
+    # 품목별로 좌/우 수량 입력
+    for idx, item in enumerate(lr_items_to_configure):
+        품목 = item["품목"]
+        사양 = item["사양"]
+        기본수량 = item["수량"]
+
+        key_base = f"{품목}_{사양}"
+
+        with st.expander(f"📦 {품목} - {사양} (기본 수량: {기본수량})"):
+            col1, col2, col3 = st.columns([2, 1, 1])
+
+            with col1:
+                use_separate = st.checkbox(
+                    "좌/우 수량 별도 지정",
+                    key=f"use_separate_{idx}",
+                    value=key_base in st.session_state["lr_quantity_override"]
+                )
+
+            if use_separate:
+                with col2:
+                    left_qty = st.number_input(
+                        "좌 (L) 수량",
+                        min_value=0,
+                        value=int(기본수량 / 2) if key_base not in st.session_state["lr_quantity_override"] else st.session_state["lr_quantity_override"][key_base].get("L", int(기본수량 / 2)),
+                        step=1,
+                        key=f"left_qty_{idx}"
+                    )
+
+                with col3:
+                    right_qty = st.number_input(
+                        "우 (R) 수량",
+                        min_value=0,
+                        value=int(기본수량 / 2) if key_base not in st.session_state["lr_quantity_override"] else st.session_state["lr_quantity_override"][key_base].get("R", int(기본수량 / 2)),
+                        step=1,
+                        key=f"right_qty_{idx}"
+                    )
+
+                # session state에 저장
+                st.session_state["lr_quantity_override"][key_base] = {
+                    "L": left_qty,
+                    "R": right_qty,
+                    "품목": 품목,
+                    "사양": 사양
+                }
+
+                total = left_qty + right_qty
+                if total != 기본수량:
+                    st.warning(f"⚠️ 좌우 합계({total})가 기본 수량({기본수량})과 다릅니다.")
+            else:
+                # 별도 지정 해제 시 session state에서 제거
+                if key_base in st.session_state["lr_quantity_override"]:
+                    del st.session_state["lr_quantity_override"][key_base]
+else:
+    st.info("L/R 구분이 필요한 품목이 없습니다.")
+
 # 전체 품목 추출
 st.markdown("---")
 st.subheader("1단계: 전체 품목 추출")
@@ -1784,20 +1870,80 @@ for row in source_items:
             사양 = floor_spec_info["사양"]  # 예: "1500*2200좌"
             단가 = floor_spec_info["단가"]
 
-    key = (품목, 사양)
-    if key not in all_items:
-        all_items[key] = {
-            "품목": 품목,
-            "사양": 사양,
-            "총수량": 0,
-            "단가": 단가,
-        }
-    all_items[key]["총수량"] += 수량
+    # L/R 수량 별도 지정 확인
+    key_base = f"{품목}_{사양}"
+    lr_override = st.session_state.get("lr_quantity_override", {}).get(key_base)
+
+    if lr_override:
+        # 좌/우로 분리된 경우
+        left_qty = lr_override.get("L", 0)
+        right_qty = lr_override.get("R", 0)
+
+        # 좌 품목 추가
+        if left_qty > 0:
+            # 사양에 좌 표시 추가 (이미 없는 경우)
+            사양_L = 사양
+            if "좌" not in 사양_L and "L" not in 사양_L.upper():
+                사양_L = f"{사양}좌"
+
+            key_L = (품목, 사양_L)
+            if key_L not in all_items:
+                all_items[key_L] = {
+                    "품목": 품목,
+                    "사양": 사양_L,
+                    "총수량": 0,
+                    "단가": 단가,
+                    "방향": "L"
+                }
+            all_items[key_L]["총수량"] += left_qty
+
+        # 우 품목 추가
+        if right_qty > 0:
+            # 사양에 우 표시 추가 (이미 없는 경우)
+            사양_R = 사양
+            if "우" not in 사양_R and "R" not in 사양_R.upper():
+                사양_R = f"{사양}우"
+
+            key_R = (품목, 사양_R)
+            if key_R not in all_items:
+                all_items[key_R] = {
+                    "품목": 품목,
+                    "사양": 사양_R,
+                    "총수량": 0,
+                    "단가": 단가,
+                    "방향": "R"
+                }
+            all_items[key_R]["총수량"] += right_qty
+    else:
+        # 기본 처리 (분리 안 함)
+        key = (품목, 사양)
+        if key not in all_items:
+            all_items[key] = {
+                "품목": 품목,
+                "사양": 사양,
+                "총수량": 0,
+                "단가": 단가,
+            }
+        all_items[key]["총수량"] += 수량
 
 items_list = list(all_items.values())
 
 if items_list:
-    st.info(f"총 {len(items_list)}개의 고유 품목이 추출되었습니다.")
+    # 품목 통계 표시
+    total_items = len(items_list)
+    lr_separated_items = sum(1 for item in items_list if item.get("방향") in ["L", "R"])
+    normal_items = total_items - lr_separated_items
+
+    st.success(f"✅ 총 **{total_items}개**의 고유 품목이 추출되었습니다.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("전체 품목 수", total_items)
+    with col2:
+        st.metric("일반 품목", normal_items, help="L/R 분리 없이 처리된 품목")
+    with col3:
+        st.metric("L/R 분리 품목", lr_separated_items, help="좌/우로 분리된 품목 수")
+
     items_df = pd.DataFrame(items_list)
     st.dataframe(items_df, use_container_width=True, hide_index=True)
 else:
@@ -1909,7 +2055,8 @@ if matching_results:
                     "ERP 코드": r["code"],
                     "대분류": r["대분류"],
                     "중분류": r["중분류"],
-                    "수량": r["수량"],
+                    "구성수량": int(r["수량"]),
+                    "수주발생수량": int(r["수량"]),
                 }
                 for r in exact_results
             ])
@@ -1961,7 +2108,8 @@ if matching_results:
                     "대분류": r["대분류"],
                     "중분류": r["중분류"],
                     "규격코드": r.get("규격코드", "") or "",
-                    "수량": r["수량"],
+                    "구성수량": int(r["수량"]),
+                    "수주발생수량": int(r["수량"]),
                 }
                 for r in new_results
             ])

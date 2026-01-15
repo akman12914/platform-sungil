@@ -772,7 +772,7 @@ def calculate_auto_items(floor_type: str, shape_type: str) -> Dict[str, float]:
     return items
 
 # ═══════════════════════════════════════════════════════════════
-# AI 품목 탐지 결과 (챗봇에서 탐지된 결과 표시)
+# AI 품목 탐지 결과 (AI 시방서 분석 페이지에서 탐지된 결과 표시)
 # ═══════════════════════════════════════════════════════════════
 AI_COMPARISON_RESULT_KEY = "ai_comparison_result"
 AI_PENDING_ITEMS_KEY = "ai_pending_items"
@@ -871,7 +871,7 @@ if comparison or pending_items:
                             st.session_state[AI_PENDING_ITEMS_KEY] = pending_items
                             st.rerun()
 else:
-    st.info("📋 챗봇 페이지에서 시방서 PDF를 업로드하고 인덱스를 생성하면 품목이 자동 탐지됩니다.")
+    st.info("📋 AI 시방서 분석 페이지에서 시방서 PDF를 업로드하고 인덱스를 생성하면 품목이 자동 탐지됩니다.")
 
 # ═══════════════════════════════════════════════════════════════
 # UI: 바닥판 종류 및 형태 선택

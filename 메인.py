@@ -319,7 +319,7 @@ with c4:
 
 with c5:
     st.page_link(
-        "pages/0_chatbot.py",
-        label="💬 시방서 Q&A\nAI 챗봇 (PDF 검색)",
+        "pages/0_AI_시방서_분석.py",
+        label="💬 AI 시방서 분석\nAI 기반 시방서 분석 (PDF 검색)",
         icon=None,
     )

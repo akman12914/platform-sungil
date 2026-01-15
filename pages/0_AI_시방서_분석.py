@@ -13,6 +13,14 @@ from zoneinfo import ZoneInfo
 import math
 from typing import List, Tuple
 
+# Demo cache utilities
+from utils.demo_cache import (
+    detect_demo_file,
+    load_demo_cache,
+    load_demo_vectorstore,
+    load_demo_raw_docs
+)
+
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -135,12 +143,12 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 assert OPENAI_API_KEY, "OPENAI_API_KEY가 .env에 없습니다."
 
-set_page_config(page_title="시방서 Q&A 챗봇", page_icon="🛁", layout="wide")
+set_page_config(page_title="AI 시방서 분석", page_icon="🛁", layout="wide")
 apply_common_styles()
 
 auth.require_auth()
 
-st.title("🛁 시방서 Q&A 챗봇")
+st.title("🛁 AI 시방서 분석")
 
 # ---------------------------------------
 # ✅ 상태 초기화
@@ -338,7 +346,7 @@ SYSTEM_INSTRUCTIONS = """\
 너는 욕실(UBR) 공사 시방서 전용 전문가 어시스턴트다.
 - 반드시 업로드된 시방서/도면(컨텍스트)에 근거해 대답하라.
 - 근거가 불충분하면 '해당사항 없음' 또는 '시방서에 명시 없음'이라고 답하고 추측하지 마라.
-- 질문이 시방서 범위를 벗어나면 '본 챗봇은 시방서 기반 질의만 답변합니다'라고 안내하라.
+- 질문이 시방서 범위를 벗어나면 '시방서 기반 질의만 답변합니다'라고 안내하라.
 - 수량이나 치수 계산이 필요한 경우, 문서 근거(페이지/문구)를 요약해서 함께 제시하라.
 - 답변은 한국어로, 항목형/표형 정리 선호.
 """
@@ -830,45 +838,87 @@ with col_a:
         if not uploaded:
             st.warning("먼저 파일을 업로드하세요.")
         else:
-            with st.spinner("문서 로딩/청크 분할/임베딩 중..."):
-                # 이번 업로드 배치만 별도로 로딩
-                raw_docs = load_docs(uploaded)
-                chunks = split_docs(
-                    raw_docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap
-                )
+            # 🆕 데모 파일 감지 (단일 파일 업로드일 때만)
+            demo_cache_path = None
+            if len(uploaded) == 1:
+                try:
+                    demo_cache_path = detect_demo_file(uploaded[0])
+                except Exception as e:
+                    st.warning(f"캐시 확인 중 오류 (일반 처리 진행): {e}")
 
-                embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-                vs = FAISS.from_documents(chunks, embeddings)
-                st.session_state["vectorstore"] = vs
+            if demo_cache_path:
+                # ✨ 즉시 로딩 경로
+                with st.spinner("인덱스 생성 중..."):
+                    try:
+                        # 캐시 로드
+                        cached_results = load_demo_cache(demo_cache_path)
+                        st.session_state["vectorstore"] = load_demo_vectorstore(demo_cache_path)
+                        st.session_state["last_index_batch_docs"] = load_demo_raw_docs(demo_cache_path)
 
-                # 🔹 이번 배치를 저장(요약은 '이번 배치 우선' 생성)
-                st.session_state["last_index_batch_docs"] = raw_docs
+                        # 세션 스테이트 복원
+                        st.session_state["last_index_summary"] = cached_results["last_index_summary"]
+                        st.session_state[AI_DETECTED_ITEMS_KEY] = cached_results["ai_detected_items"]
+                        st.session_state[AI_COMPARISON_RESULT_KEY] = cached_results["ai_comparison_result"]
+                        st.session_state[AI_QUOTE_SENTENCES_KEY] = cached_results["ai_quote_sentences"]
 
-                # 🔹 바로 요약 생성
-                st.session_state["last_index_summary"] = make_batch_summary(
-                    raw_docs, model=model_name
-                )
+                    except Exception as e:
+                        st.error(f"캐시 로드 실패: {e}")
+                        st.info("일반 처리로 전환합니다...")
+                        demo_cache_path = None  # Fallback to normal
 
-            st.success(f"인덱스 생성 완료! (청크 수: {len(chunks)})")
+                if demo_cache_path:  # 성공 시
+                    chunk_count = cached_results.get("chunk_count", "N/A")
+                    st.success(f"인덱스 생성 완료! (청크 수: {chunk_count})")
 
-            # 🔹 품목 자동 탐지
-            with st.spinner("품목 자동 탐지 중..."):
-                detected = extract_items_from_pdf(raw_docs, model=model_name)
-                current = get_all_current_items()
-                comparison = compare_with_detected(detected, current)
-                st.session_state[AI_DETECTED_ITEMS_KEY] = detected
-                st.session_state[AI_COMPARISON_RESULT_KEY] = comparison
+                    comparison = cached_results.get("ai_comparison_result")
+                    if comparison and comparison.get("to_add"):
+                        st.info(f"📋 {comparison['summary']}")
 
-            # 🔹 '견적에 포함' 문장 추출
-            with st.spinner("'견적에 포함' 문장 분석 중..."):
-                quote_sentences = extract_quote_sentences(raw_docs, model=model_name)
-                st.session_state[AI_QUOTE_SENTENCES_KEY] = quote_sentences
+                    quote_sentences = cached_results.get("ai_quote_sentences")
+                    if quote_sentences:
+                        st.warning(f"📝 '견적에 포함' 관련 문장 {len(quote_sentences)}개 발견!")
 
-            if comparison and comparison.get("to_add"):
-                st.info(f"📋 {comparison['summary']}")
+            # 🔄 기존 로직 (캐시 없을 때 또는 fallback)
+            if not demo_cache_path:
+                with st.spinner("문서 로딩/청크 분할/임베딩 중..."):
+                    # 이번 업로드 배치만 별도로 로딩
+                    raw_docs = load_docs(uploaded)
+                    chunks = split_docs(
+                        raw_docs, chunk_size=chunk_size, chunk_overlap=chunk_overlap
+                    )
 
-            if quote_sentences:
-                st.warning(f"📝 '견적에 포함' 관련 문장 {len(quote_sentences)}개 발견!")
+                    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+                    vs = FAISS.from_documents(chunks, embeddings)
+                    st.session_state["vectorstore"] = vs
+
+                    # 🔹 이번 배치를 저장(요약은 '이번 배치 우선' 생성)
+                    st.session_state["last_index_batch_docs"] = raw_docs
+
+                    # 🔹 바로 요약 생성
+                    st.session_state["last_index_summary"] = make_batch_summary(
+                        raw_docs, model=model_name
+                    )
+
+                st.success(f"인덱스 생성 완료! (청크 수: {len(chunks)})")
+
+                # 🔹 품목 자동 탐지
+                with st.spinner("품목 자동 탐지 중..."):
+                    detected = extract_items_from_pdf(raw_docs, model=model_name)
+                    current = get_all_current_items()
+                    comparison = compare_with_detected(detected, current)
+                    st.session_state[AI_DETECTED_ITEMS_KEY] = detected
+                    st.session_state[AI_COMPARISON_RESULT_KEY] = comparison
+
+                # 🔹 '견적에 포함' 문장 추출
+                with st.spinner("'견적에 포함' 문장 분석 중..."):
+                    quote_sentences = extract_quote_sentences(raw_docs, model=model_name)
+                    st.session_state[AI_QUOTE_SENTENCES_KEY] = quote_sentences
+
+                if comparison and comparison.get("to_add"):
+                    st.info(f"📋 {comparison['summary']}")
+
+                if quote_sentences:
+                    st.warning(f"📝 '견적에 포함' 관련 문장 {len(quote_sentences)}개 발견!")
 
 with col_b:
     if st.button("🗑 인덱스 초기화", use_container_width=True):

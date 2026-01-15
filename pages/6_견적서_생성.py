@@ -31,7 +31,7 @@ DEFAULT_PROD_MGMT_CATEGORIES = {
             ("바닥판", "GRP"),
             ("바닥판", "FRP"),  # FRP 포함 (SMC/FRP 등)
             ("바닥판", "SMC"),  # SMC 포함
-            ("바닥판", "PP"),   # PP/PE 포함
+            ("바닥판", "PP"),  # PP/PE 포함
             ("욕조", None),  # 욕조 전체
         ],
         "rate": 20.0,  # 기본값 20%
@@ -89,13 +89,16 @@ def parse_item_key(key: str) -> tuple:
     return (parts[0], parts[1]) if len(parts) == 2 else (parts[0], "")
 
 
-def item_matches_pattern(품목: str, 사양: str, pattern_품목: str, pattern_사양: Optional[str]) -> bool:
+def item_matches_pattern(
+    품목: str, 사양: str, pattern_품목: str, pattern_사양: Optional[str]
+) -> bool:
     """품목+사양이 패턴과 매칭되는지 확인"""
     if 품목 != pattern_품목:
         return False
     if pattern_사양 is None:
         return True  # 품목만 매칭하면 전체 포함
     return pattern_사양.upper() in 사양.upper()
+
 
 set_page_config(page_title="욕실 견적서 생성기", layout="wide")
 apply_common_styles()
@@ -353,6 +356,7 @@ def convert_ceiling_data(ceil_result: dict) -> dict:
     if body_models:
         # 가장 많이 나온 모델
         from collections import Counter
+
         body_top = Counter(body_models).most_common(1)
         if body_top:
             body_info = {"종류": body_top[0][0].replace("(rot)", ""), "개수": body_cnt}
@@ -360,6 +364,7 @@ def convert_ceiling_data(ceil_result: dict) -> dict:
     side_info = {}
     if side_models:
         from collections import Counter
+
         side_top = Counter(side_models).most_common(1)
         if side_top:
             side_info = {"종류": side_top[0][0].replace("(rot)", ""), "개수": side_cnt}
@@ -502,9 +507,13 @@ with st.sidebar:
 
     # 파일 소스 선택
     use_shared = st.checkbox(
-        f"바닥판 공유 파일 사용 ({shared_excel_name})" if shared_excel else "바닥판 공유 파일 사용 (없음)",
+        (
+            f"바닥판 공유 파일 사용 ({shared_excel_name})"
+            if shared_excel
+            else "바닥판 공유 파일 사용 (없음)"
+        ),
         value=shared_excel is not None,
-        disabled=shared_excel is None
+        disabled=shared_excel is None,
     )
 
     pricebook_file = None
@@ -665,7 +674,12 @@ SHAPE_TYPE_ITEMS = {
 # 【B-1】 기본값 있음 (4개)
 SELECT_ITEMS_WITH_DEFAULT = {
     "냉온수배관": {
-        "options": ["선택안함", "PB 독립배관", "PB 세대 세트 배관", "PB+이중관(오픈수전함)"],
+        "options": [
+            "선택안함",
+            "PB 독립배관",
+            "PB 세대 세트 배관",
+            "PB+이중관(오픈수전함)",
+        ],
         "default": "PB+이중관(오픈수전함)",
         "category": "냉온수배관",
     },
@@ -680,7 +694,17 @@ SELECT_ITEMS_WITH_DEFAULT = {
         "category": "욕실장",
     },
     "문틀규격": {
-        "options": ["선택안함", "110m/m", "130m/m", "140m/m", "155m/m", "175m/m", "195m/m", "210m/m", "230m/m"],
+        "options": [
+            "선택안함",
+            "110m/m",
+            "130m/m",
+            "140m/m",
+            "155m/m",
+            "175m/m",
+            "195m/m",
+            "210m/m",
+            "230m/m",
+        ],
         "default": "선택안함",  # 필수 선택 (벽체 두께에 따라)
         "category": "문세트",
     },
@@ -754,6 +778,7 @@ OPTIONAL_ITEMS = {
 # 자동지정 품목 계산 함수
 # ═══════════════════════════════════════════════════════════════
 
+
 def calculate_auto_items(floor_type: str, shape_type: str) -> Dict[str, float]:
     """바닥판 종류와 형태에 따라 자동지정 품목 수량 계산"""
     items = {}
@@ -770,6 +795,7 @@ def calculate_auto_items(floor_type: str, shape_type: str) -> Dict[str, float]:
         items.update(SHAPE_TYPE_ITEMS[shape_type])
 
     return items
+
 
 # ═══════════════════════════════════════════════════════════════
 # AI 품목 탐지 결과 (AI 시방서 분석 페이지에서 탐지된 결과 표시)
@@ -793,7 +819,9 @@ if comparison or pending_items:
         for idx, item in enumerate(pending_items):
             col1, col2, col3 = st.columns([3, 1.5, 0.5])
             with col1:
-                st.write(f"• **{item.get('name', '')}** - {item.get('source', '')[:40] if item.get('source') else ''}")
+                st.write(
+                    f"• **{item.get('name', '')}** - {item.get('source', '')[:40] if item.get('source') else ''}"
+                )
             with col2:
                 # 수량 입력 필드 (기본값 1)
                 new_qty = st.number_input(
@@ -801,7 +829,7 @@ if comparison or pending_items:
                     min_value=1,
                     value=item.get("qty") or 1,
                     key=f"qty_pending_{idx}_{item.get('name', '')}",
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
                 )
                 # 수량 변경 시 반영
                 if new_qty != item.get("qty"):
@@ -816,7 +844,9 @@ if comparison or pending_items:
         st.markdown("---")
         col_add1, col_add2 = st.columns(2)
         with col_add1:
-            if st.button("✅ 모두 견적서에 추가", use_container_width=True, type="primary"):
+            if st.button(
+                "✅ 모두 견적서에 추가", use_container_width=True, type="primary"
+            ):
                 # CUSTOM_ITEMS에 추가
                 custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
                 added_count = 0
@@ -824,13 +854,15 @@ if comparison or pending_items:
                     # 중복 체크
                     existing_names = [c.get("name", "").lower() for c in custom_items]
                     if item.get("name", "").lower() not in existing_names:
-                        custom_items.append({
-                            "category": "AI탐지",
-                            "name": item.get("name", ""),
-                            "spec": item.get("spec", ""),
-                            "qty": item.get("qty") or 1,
-                            "source": "AI_DETECTED"
-                        })
+                        custom_items.append(
+                            {
+                                "category": "AI탐지",
+                                "name": item.get("name", ""),
+                                "spec": item.get("spec", ""),
+                                "qty": item.get("qty") or 1,
+                                "source": "AI_DETECTED",
+                            }
+                        )
                         added_count += 1
                 st.session_state[CUSTOM_ITEMS_KEY] = custom_items
                 st.session_state[AI_PENDING_ITEMS_KEY] = []
@@ -845,15 +877,21 @@ if comparison or pending_items:
     if comparison:
         to_add = comparison.get("to_add", [])
         pending_names = {p.get("name", "").lower() for p in pending_items}
-        remaining = [item for item in to_add if item.get("name", "").lower() not in pending_names]
+        remaining = [
+            item for item in to_add if item.get("name", "").lower() not in pending_names
+        ]
 
         if remaining:
-            with st.expander(f"📝 추가 검토 필요 품목 ({len(remaining)}개)", expanded=False):
+            with st.expander(
+                f"📝 추가 검토 필요 품목 ({len(remaining)}개)", expanded=False
+            ):
                 for idx, item in enumerate(remaining):
                     col1, col2, col3 = st.columns([3.5, 1.5, 1])
                     with col1:
                         priority_icon = "🔴" if item.get("priority") == "high" else "🟡"
-                        st.write(f"{priority_icon} {item.get('name', '')} - {item.get('source', '')[:30] if item.get('source') else ''}")
+                        st.write(
+                            f"{priority_icon} {item.get('name', '')} - {item.get('source', '')[:30] if item.get('source') else ''}"
+                        )
                     with col2:
                         # 수량 입력 필드 (기본값 1)
                         review_qty = st.number_input(
@@ -861,17 +899,21 @@ if comparison or pending_items:
                             min_value=1,
                             value=item.get("qty") or 1,
                             key=f"qty_review_{idx}_{item.get('name', '')}",
-                            label_visibility="collapsed"
+                            label_visibility="collapsed",
                         )
                     with col3:
-                        if st.button("추가", key=f"est_review_add_{idx}_{item.get('name', '')}"):
+                        if st.button(
+                            "추가", key=f"est_review_add_{idx}_{item.get('name', '')}"
+                        ):
                             item_to_add = item.copy()
                             item_to_add["qty"] = review_qty
                             pending_items.append(item_to_add)
                             st.session_state[AI_PENDING_ITEMS_KEY] = pending_items
                             st.rerun()
 else:
-    st.info("📋 AI 시방서 분석 페이지에서 시방서 PDF를 업로드하고 인덱스를 생성하면 품목이 자동 탐지됩니다.")
+    st.info(
+        "📋 AI 시방서 분석 페이지에서 시방서 PDF를 업로드하고 인덱스를 생성하면 품목이 자동 탐지됩니다."
+    )
 
 # ═══════════════════════════════════════════════════════════════
 # UI: 바닥판 종류 및 형태 선택
@@ -899,7 +941,7 @@ with col_floor_type:
         horizontal=True,
         help="바닥판 페이지에서 지정된 값 (수정 불가)",
         key="floor_type_radio",
-        disabled=True  # 수정 불가
+        disabled=True,  # 수정 불가
     )
 
 with col_shape_type:
@@ -914,7 +956,7 @@ with col_shape_type:
         horizontal=True,
         help="바닥판 페이지에서 지정된 값 (수정 불가)",
         key="shape_type_radio",
-        disabled=True  # 수정 불가
+        disabled=True,  # 수정 불가
     )
 
 # 변경 감지 (바닥판 페이지에서 값이 변경된 경우)
@@ -928,7 +970,9 @@ current_auto_items = calculate_auto_items(floor_type, shape_type)
 
 if floor_type_changed or shape_type_changed:
     st.session_state[AUTO_ITEMS_KEY] = current_auto_items.copy()
-    st.info(f"바닥판 종류({floor_type}) 또는 형태({shape_type}) 변경으로 품목 수량이 초기화되었습니다.")
+    st.info(
+        f"바닥판 종류({floor_type}) 또는 형태({shape_type}) 변경으로 품목 수량이 초기화되었습니다."
+    )
 
 if AUTO_ITEMS_KEY not in st.session_state:
     st.session_state[AUTO_ITEMS_KEY] = current_auto_items.copy()
@@ -956,10 +1000,7 @@ for idx, (name, info) in enumerate(SELECT_ITEMS_WITH_DEFAULT.items()):
         default_idx = options.index(default_val) if default_val in options else 0
 
         selected = st.selectbox(
-            name,
-            options=options,
-            index=default_idx,
-            key=f"select_{name}"
+            name, options=options, index=default_idx, key=f"select_{name}"
         )
         select_values[name] = selected
 
@@ -982,14 +1023,13 @@ with st.expander("옵션 품목 (선택사항)", expanded=False):
     for idx, (name, info) in enumerate(OPTIONAL_ITEMS.items()):
         with opt_cols[idx % 3]:
             options = info["options"]
-            default_val = st.session_state[OPTIONAL_ITEMS_KEY].get(name, info["default"])
+            default_val = st.session_state[OPTIONAL_ITEMS_KEY].get(
+                name, info["default"]
+            )
             default_idx = options.index(default_val) if default_val in options else 0
 
             selected = st.selectbox(
-                name,
-                options=options,
-                index=default_idx,
-                key=f"opt_{name}"
+                name, options=options, index=default_idx, key=f"opt_{name}"
             )
             opt_values[name] = selected
 
@@ -1009,23 +1049,51 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
 
     # 카테고리별 분류
     auto_categories = {
-        "오수/배수 배관류": ["엘보(Φ100)", "엘보(Φ50)", "직관(Φ100)", "직관(Φ50)",
-                          "오수구덮개", "PVC접착제", "배수트랩(습식용)", "배수트랩(상하용)",
-                          "드레인커버(세면부)", "드레인커버(샤워부)"],
-        "PP바닥판 전용": ["양변기(오수구) 소켓(Φ100)", "세면,바닥,샤워 배수세트(Φ175)",
-                        "난방배관 소켓(Φ16)", "클럽메쉬 세트(클립포함)", "벽체코너 받침대",
-                        "볼트", "성형슬리브(오수)Φ125", "성형슬리브(세면,바닥,샤워)Φ175",
-                        "슬리브용 몰탈막음 스펀지"],
+        "오수/배수 배관류": [
+            "엘보(Φ100)",
+            "엘보(Φ50)",
+            "직관(Φ100)",
+            "직관(Φ50)",
+            "오수구덮개",
+            "PVC접착제",
+            "배수트랩(습식용)",
+            "배수트랩(상하용)",
+            "드레인커버(세면부)",
+            "드레인커버(샤워부)",
+        ],
+        "PP바닥판 전용": [
+            "양변기(오수구) 소켓(Φ100)",
+            "세면,바닥,샤워 배수세트(Φ175)",
+            "난방배관 소켓(Φ16)",
+            "클럽메쉬 세트(클립포함)",
+            "벽체코너 받침대",
+            "볼트",
+            "성형슬리브(오수)Φ125",
+            "성형슬리브(세면,바닥,샤워)Φ175",
+            "슬리브용 몰탈막음 스펀지",
+        ],
         "도기류": ["양변기"],
         "문세트": ["PVC 4방문틀", "ABS 문짝", "도어하드웨어"],
         "포켓도어": ["가틀", "본틀", "레일 및 뎀퍼", "오목손잡이 및 문틀받침대"],
         "수전": ["세면기 수전", "샤워수전", "슬라이드바"],
         "액세서리": ["은경(거울)", "수건걸이", "휴지걸이", "일자유리선반", "코너선반"],
         "자재 품목 (욕실등)": ["욕실등", "원형등", "사각등", "원형 매립등"],
-        "가공 품목 (천장판 타공)": ["환풍기홀", "사각매립등", "원형등 타공", "직선 1회"],
-        "공통자재": ["실리콘(내항균성)", "실리콘(외장용)", "우레탄폼",
-                    "이면지지클립", "타일 평탄클립", "에폭시 접착제",
-                    "코너마감재", "코너비드"],
+        "가공 품목 (천장판 타공)": [
+            "환풍기홀",
+            "사각매립등",
+            "원형등 타공",
+            "직선 1회",
+        ],
+        "공통자재": [
+            "실리콘(내항균성)",
+            "실리콘(외장용)",
+            "우레탄폼",
+            "이면지지클립",
+            "타일 평탄클립",
+            "에폭시 접착제",
+            "코너마감재",
+            "코너비드",
+        ],
     }
 
     edited_items = st.session_state.get(AUTO_ITEMS_KEY, current_auto_items).copy()
@@ -1041,7 +1109,11 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
                 default_qty = current_auto_items[item_name]
 
                 with cols[col_idx % 3]:
-                    help_text = "현재 바닥판에서 미사용 (기본: 0)" if default_qty == 0 else f"기본값: {default_qty}"
+                    help_text = (
+                        "현재 바닥판에서 미사용 (기본: 0)"
+                        if default_qty == 0
+                        else f"기본값: {default_qty}"
+                    )
                     edited_qty = st.number_input(
                         item_name,
                         min_value=0.0,
@@ -1049,7 +1121,7 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
                         value=float(saved_qty),
                         step=0.5,
                         key=f"auto_{item_name}",
-                        help=help_text
+                        help=help_text,
                     )
                     edited_items[item_name] = edited_qty
                 col_idx += 1
@@ -1062,17 +1134,17 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
     quote_sentences = st.session_state.get("ai_quote_sentences", [])
     if quote_sentences:
         st.divider()
-        st.markdown("### 📝 '견적에 포함' 문장에서 품목 추가")
-        st.caption("시방서에서 '견적에 포함'으로 명시된 항목입니다. 품목명을 입력하여 추가하세요.")
+        st.markdown("### 📝 시방서에서 누락 함목 탐지 ")
+        st.caption("품목명을 입력하여 추가하세요.")
 
         for idx, sent in enumerate(quote_sentences):
             with st.container():
                 st.info(f"**문장:** {sent.get('sentence', '')}")
-                if sent.get('context'):
+                if sent.get("context"):
                     st.caption(f"상황: {sent.get('context', '')}")
 
                 # AI가 추출한 품목 제안
-                suggested_items = sent.get('items', [])
+                suggested_items = sent.get("items", [])
                 col1, col2, col3 = st.columns([2, 1, 1])
                 with col1:
                     # 제안된 품목 또는 직접 입력
@@ -1081,25 +1153,26 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
                         "품목명",
                         value=default_name,
                         key=f"quote_item_{idx}",
-                        placeholder="품목명 입력"
+                        placeholder="품목명 입력",
                     )
                 with col2:
                     item_qty = st.number_input(
-                        "수량",
-                        min_value=1,
-                        value=1,
-                        key=f"quote_qty_{idx}"
+                        "수량", min_value=1, value=1, key=f"quote_qty_{idx}"
                     )
                 with col3:
-                    if st.button("추가", key=f"quote_add_{idx}", use_container_width=True):
+                    if st.button(
+                        "추가", key=f"quote_add_{idx}", use_container_width=True
+                    ):
                         if item_name.strip():
                             custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
-                            custom_items.append({
-                                "category": "견적포함",
-                                "name": item_name.strip(),
-                                "qty": item_qty,
-                                "source": sent.get('sentence', '')[:50]
-                            })
+                            custom_items.append(
+                                {
+                                    "category": "견적포함",
+                                    "name": item_name.strip(),
+                                    "qty": item_qty,
+                                    "source": sent.get("sentence", "")[:50],
+                                }
+                            )
                             st.session_state[CUSTOM_ITEMS_KEY] = custom_items
                             st.success(f"'{item_name}' 추가됨!")
                             st.rerun()
@@ -1125,15 +1198,19 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
         with col_name:
             new_item_name = st.text_input("품목명", placeholder="예: 비누받침대")
         with col_qty:
-            new_qty = st.number_input("수량", min_value=0.0, max_value=100.0, value=1.0, step=0.5)
+            new_qty = st.number_input(
+                "수량", min_value=0.0, max_value=100.0, value=1.0, step=0.5
+            )
 
         add_btn = st.form_submit_button("품목 추가", use_container_width=True)
         if add_btn and new_item_name.strip():
-            st.session_state[CUSTOM_ITEMS_KEY].append({
-                "category": new_category.strip() or "기타",
-                "name": new_item_name.strip(),
-                "qty": new_qty
-            })
+            st.session_state[CUSTOM_ITEMS_KEY].append(
+                {
+                    "category": new_category.strip() or "기타",
+                    "name": new_item_name.strip(),
+                    "qty": new_qty,
+                }
+            )
             st.success(f"'{new_item_name}' 품목이 추가되었습니다.")
             st.rerun()
 
@@ -1249,7 +1326,11 @@ else:
         rec = find_item(
             price_df, "타일", "PU타일 벽체 타일", spec_contains=wall_tile_spec
         )
-        wall_tile_qty = total_wall_tiles if total_wall_tiles > 0 else (rec.get("수량", 1) if rec else 1)
+        wall_tile_qty = (
+            total_wall_tiles
+            if total_wall_tiles > 0
+            else (rec.get("수량", 1) if rec else 1)
+        )
         wall_tile_unit_price = rec.get("단가", 0) if rec else 0
         if rec is not None:
             add_row(rows, "타일", wall_tile_spec, wall_tile_qty, wall_tile_unit_price)
@@ -1263,10 +1344,16 @@ else:
         )
         if rec is None:
             rec = find_item(price_df, "타일", "바닥타일", spec_contains=floor_tile_spec)
-        floor_tile_qty = total_floor_tiles if total_floor_tiles > 0 else (rec.get("수량", 1) if rec else 1)
+        floor_tile_qty = (
+            total_floor_tiles
+            if total_floor_tiles > 0
+            else (rec.get("수량", 1) if rec else 1)
+        )
         floor_tile_unit_price = rec.get("단가", 0) if rec else 0
         if rec is not None:
-            add_row(rows, "타일", floor_tile_spec, floor_tile_qty, floor_tile_unit_price)
+            add_row(
+                rows, "타일", floor_tile_spec, floor_tile_qty, floor_tile_unit_price
+            )
         else:
             add_row(rows, "타일", floor_tile_spec, floor_tile_qty, 0)
             warnings.append(f"'{floor_tile_spec}' 단가 미발견 → 0 처리")
@@ -1503,7 +1590,14 @@ if rows:
     for _, row in est_df.iterrows():
         item_key = get_item_key(str(row["품목"]), str(row["사양 및 규격"]))
         if item_key not in [i[0] for i in available_items]:
-            available_items.append((item_key, str(row["품목"]), str(row["사양 및 규격"]), float(row["금액"])))
+            available_items.append(
+                (
+                    item_key,
+                    str(row["품목"]),
+                    str(row["사양 및 규격"]),
+                    float(row["금액"]),
+                )
+            )
 
     # 세션 상태 초기화
     if PROD_MGMT_SETTINGS_KEY not in st.session_state:
@@ -1520,14 +1614,26 @@ if rows:
         st.markdown("##### 새 카테고리 추가")
         col_new_name, col_new_rate, col_new_btn = st.columns([3, 1, 1])
         with col_new_name:
-            new_cat_name = st.text_input("카테고리명", key="new_cat_name", placeholder="예: 신규카테고리")
+            new_cat_name = st.text_input(
+                "카테고리명", key="new_cat_name", placeholder="예: 신규카테고리"
+            )
         with col_new_rate:
-            new_cat_rate = st.number_input("비율(%)", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="new_cat_rate")
+            new_cat_rate = st.number_input(
+                "비율(%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=0.0,
+                step=0.5,
+                key="new_cat_rate",
+            )
         with col_new_btn:
             st.write("")
             if st.button("➕ 추가", key="add_cat_btn"):
                 if new_cat_name and new_cat_name not in prod_mgmt_categories:
-                    prod_mgmt_categories[new_cat_name] = {"items": [], "rate": new_cat_rate}
+                    prod_mgmt_categories[new_cat_name] = {
+                        "items": [],
+                        "rate": new_cat_rate,
+                    }
                     st.session_state[PROD_MGMT_SETTINGS_KEY] = prod_mgmt_categories
                     st.success(f"'{new_cat_name}' 카테고리 추가됨")
                     st.rerun()
@@ -1542,7 +1648,7 @@ if rows:
             cat_to_delete = st.selectbox(
                 "삭제할 카테고리",
                 options=list(prod_mgmt_categories.keys()),
-                key="cat_to_delete"
+                key="cat_to_delete",
             )
             if st.button("🗑️ 선택 카테고리 삭제", key="delete_cat_btn"):
                 if cat_to_delete in prod_mgmt_categories:
@@ -1578,7 +1684,7 @@ if rows:
                     max_value=100.0,
                     value=float(cat_info.get("rate", 0.0)),
                     step=0.5,
-                    key=f"rate_{cat_name}"
+                    key=f"rate_{cat_name}",
                 )
 
             # 현재 카테고리에 매칭되는 항목 찾기
@@ -1600,7 +1706,9 @@ if rows:
             with col_info:
                 matched_total = sum(금액 for _, _, _, 금액 in matched_items)
                 mgmt_fee = matched_total * (rate / 100.0)
-                st.markdown(f"**소계:** {matched_total:,.0f}원 → **생산관리비:** {mgmt_fee:,.0f}원")
+                st.markdown(
+                    f"**소계:** {matched_total:,.0f}원 → **생산관리비:** {mgmt_fee:,.0f}원"
+                )
 
             # 포함 항목 표시 및 편집
             st.markdown("**포함 항목:**")
@@ -1617,11 +1725,18 @@ if rows:
 
             # 실제 매칭된 항목 표시
             if matched_items:
-                matched_df = pd.DataFrame([
-                    {"품목": 품목, "사양": 사양, "금액": f"{금액:,.0f}"}
-                    for _, 품목, 사양, 금액 in matched_items
-                ])
-                st.dataframe(matched_df, use_container_width=True, hide_index=True, height=min(150, 35 * (len(matched_items) + 1)))
+                matched_df = pd.DataFrame(
+                    [
+                        {"품목": 품목, "사양": 사양, "금액": f"{금액:,.0f}"}
+                        for _, 품목, 사양, 금액 in matched_items
+                    ]
+                )
+                st.dataframe(
+                    matched_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(150, 35 * (len(matched_items) + 1)),
+                )
             else:
                 st.info("매칭된 항목 없음")
 
@@ -1632,15 +1747,21 @@ if rows:
             with col_add_pattern:
                 # 추가할 품목 선택
                 unique_품목s = list(set(품목 for _, 품목, _, _ in available_items))
-                add_품목 = st.selectbox(f"품목 선택", options=[""] + unique_품목s, key=f"add_품목_{cat_name}")
+                add_품목 = st.selectbox(
+                    f"품목 선택",
+                    options=[""] + unique_품목s,
+                    key=f"add_품목_{cat_name}",
+                )
 
                 if add_품목:
                     # 해당 품목의 사양 목록
-                    품목_사양s = [사양 for _, 품목, 사양, _ in available_items if 품목 == add_품목]
+                    품목_사양s = [
+                        사양 for _, 품목, 사양, _ in available_items if 품목 == add_품목
+                    ]
                     add_사양_option = st.selectbox(
                         "사양 범위",
                         options=["전체(품목 전체 포함)"] + 품목_사양s,
-                        key=f"add_사양_{cat_name}"
+                        key=f"add_사양_{cat_name}",
                     )
 
                     if st.button("➕ 패턴 추가", key=f"add_pattern_btn_{cat_name}"):
@@ -1652,7 +1773,9 @@ if rows:
                         if new_pattern not in cat_items:
                             cat_items.append(new_pattern)
                             prod_mgmt_categories[cat_name]["items"] = cat_items
-                            st.session_state[PROD_MGMT_SETTINGS_KEY] = prod_mgmt_categories
+                            st.session_state[PROD_MGMT_SETTINGS_KEY] = (
+                                prod_mgmt_categories
+                            )
                             st.success(f"패턴 추가됨")
                             st.rerun()
 
@@ -1668,7 +1791,7 @@ if rows:
                     remove_pattern_str = st.selectbox(
                         "제거할 패턴",
                         options=pattern_options,
-                        key=f"remove_pattern_{cat_name}"
+                        key=f"remove_pattern_{cat_name}",
                     )
 
                     if st.button("➖ 패턴 제거", key=f"remove_pattern_btn_{cat_name}"):
@@ -1680,10 +1803,7 @@ if rows:
                         st.success(f"패턴 제거됨")
                         st.rerun()
 
-            updated_categories[cat_name] = {
-                "items": cat_items,
-                "rate": rate
-            }
+            updated_categories[cat_name] = {"items": cat_items, "rate": rate}
 
     # 설정 업데이트
     st.session_state[PROD_MGMT_SETTINGS_KEY] = updated_categories
@@ -1731,7 +1851,9 @@ if rows:
 
     # 표 형식으로 표시
     mgmt_summary_data = []
-    for cat_name in list(prod_mgmt_categories.keys()) + (["미분류"] if category_subtotals.get("미분류", 0) > 0 else []):
+    for cat_name in list(prod_mgmt_categories.keys()) + (
+        ["미분류"] if category_subtotals.get("미분류", 0) > 0 else []
+    ):
         subtotal = category_subtotals.get(cat_name, 0)
         if cat_name == "미분류":
             rate = 0.0
@@ -1739,13 +1861,15 @@ if rows:
             rate = prod_mgmt_categories.get(cat_name, {}).get("rate", 0.0)
         mgmt_fee = category_mgmt_fees.get(cat_name, 0)
         total_with_mgmt = subtotal + mgmt_fee
-        mgmt_summary_data.append({
-            "카테고리": cat_name,
-            "소계": f"{subtotal:,.0f}",
-            "비율(%)": f"{rate:.1f}",
-            "생산관리비": f"{mgmt_fee:,.0f}",
-            "총계": f"{total_with_mgmt:,.0f}",
-        })
+        mgmt_summary_data.append(
+            {
+                "카테고리": cat_name,
+                "소계": f"{subtotal:,.0f}",
+                "비율(%)": f"{rate:.1f}",
+                "생산관리비": f"{mgmt_fee:,.0f}",
+                "총계": f"{total_with_mgmt:,.0f}",
+            }
+        )
 
     mgmt_summary_df = pd.DataFrame(mgmt_summary_data)
     st.dataframe(mgmt_summary_df, use_container_width=True, hide_index=True)
@@ -1770,7 +1894,7 @@ if rows:
         sales_enabled = st.checkbox(
             "영업관리비 추가",
             value=sales_settings.get("enabled", False),
-            help="체크하면 영업관리비가 견적서에 포함됩니다"
+            help="체크하면 영업관리비가 견적서에 포함됩니다",
         )
     with col_sales_rate:
         if sales_enabled:
@@ -1780,7 +1904,7 @@ if rows:
                 max_value=100.0,
                 value=float(sales_settings.get("rate", 15.0)),
                 step=0.5,
-                key="sales_mgmt_rate"
+                key="sales_mgmt_rate",
             )
         else:
             sales_rate = 0.0
@@ -1797,7 +1921,9 @@ if rows:
     sales_mgmt_fee = total_before_sales * (sales_rate / 100.0) if sales_enabled else 0.0
 
     if sales_enabled:
-        st.markdown(f"**영업관리비 기준금액:** {total_before_sales:,.0f}원 × {sales_rate:.1f}% = **{sales_mgmt_fee:,.0f}원**")
+        st.markdown(
+            f"**영업관리비 기준금액:** {total_before_sales:,.0f}원 × {sales_rate:.1f}% = **{sales_mgmt_fee:,.0f}원**"
+        )
 
     # 최종 총계 (영업관리비 포함)
     final_total = grand_total + total_mgmt_fee + sales_mgmt_fee
@@ -1840,16 +1966,14 @@ if rows:
         type_name = st.text_input(
             "세대 타입 이름",
             value=f"타입{len(st.session_state[SAVED_QUOTATIONS_KEY]) + 1}",
-            help="예: 21A,B,E/22C,F"
+            help="예: 21A,B,E/22C,F",
         )
     with col_save:
         st.write("")  # 공백으로 높이 맞춤
         st.write("")
         save_disabled = len(st.session_state[SAVED_QUOTATIONS_KEY]) >= 10
         if st.button(
-            "💾 현재 견적 저장",
-            disabled=save_disabled,
-            help="최대 10개까지 저장 가능"
+            "💾 현재 견적 저장", disabled=save_disabled, help="최대 10개까지 저장 가능"
         ):
             # 현재 견적 데이터 저장 (생산관리비 정보 포함)
             # prod_mgmt_settings의 items를 리스트로 변환 (튜플은 JSON 직렬화 문제)
@@ -1857,7 +1981,7 @@ if rows:
             for k, v in prod_mgmt_categories.items():
                 serializable_settings[k] = {
                     "items": [list(item) for item in v.get("items", [])],
-                    "rate": v.get("rate", 0.0)
+                    "rate": v.get("rate", 0.0),
                 }
             quotation_data = {
                 "name": type_name,
@@ -1867,7 +1991,9 @@ if rows:
                 "total": grand_total,  # 원가 소계
                 "total_mgmt_fee": total_mgmt_fee,  # 생산관리비 합계
                 "sales_mgmt_fee": sales_mgmt_fee,  # 영업관리비
-                "sales_mgmt_rate": sales_rate if sales_enabled else 0.0,  # 영업관리비 비율
+                "sales_mgmt_rate": (
+                    sales_rate if sales_enabled else 0.0
+                ),  # 영업관리비 비율
                 "sales_mgmt_enabled": sales_enabled,  # 영업관리비 활성화 여부
                 "final_total": final_total,  # 최종 총계 (원가 + 생산관리비 + 영업관리비)
                 "category_subtotals": dict(category_subtotals),  # 카테고리별 소계
@@ -1876,7 +2002,9 @@ if rows:
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             st.session_state[SAVED_QUOTATIONS_KEY].append(quotation_data)
-            st.success(f"✅ '{type_name}' 저장 완료! (규격: {current_spec}, {current_units}세대, 최종단가: {final_total:,.0f}원)")
+            st.success(
+                f"✅ '{type_name}' 저장 완료! (규격: {current_spec}, {current_units}세대, 최종단가: {final_total:,.0f}원)"
+            )
             st.rerun()
 
     # 저장된 세대 타입 목록 표시
@@ -1885,20 +2013,26 @@ if rows:
         st.markdown("#### 저장된 세대 타입 목록")
 
         # 테이블 형식으로 표시 (생산관리비, 영업관리비 포함)
-        saved_df = pd.DataFrame([
-            {
-                "번호": i + 1,
-                "타입명": q["name"],
-                "규격": q["spec"],
-                "세대수": q["units"],
-                "원가 소계": f"{q['total']:,.0f}",
-                "생산관리비": f"{q.get('total_mgmt_fee', 0):,.0f}",
-                "영업관리비": f"{q.get('sales_mgmt_fee', 0):,.0f}" if q.get('sales_mgmt_enabled', False) else "-",
-                "세대당 최종단가": f"{q.get('final_total', q['total']):,.0f}",
-                "총 금액": f"{q.get('final_total', q['total']) * q['units']:,.0f}",
-            }
-            for i, q in enumerate(saved_list)
-        ])
+        saved_df = pd.DataFrame(
+            [
+                {
+                    "번호": i + 1,
+                    "타입명": q["name"],
+                    "규격": q["spec"],
+                    "세대수": q["units"],
+                    "원가 소계": f"{q['total']:,.0f}",
+                    "생산관리비": f"{q.get('total_mgmt_fee', 0):,.0f}",
+                    "영업관리비": (
+                        f"{q.get('sales_mgmt_fee', 0):,.0f}"
+                        if q.get("sales_mgmt_enabled", False)
+                        else "-"
+                    ),
+                    "세대당 최종단가": f"{q.get('final_total', q['total']):,.0f}",
+                    "총 금액": f"{q.get('final_total', q['total']) * q['units']:,.0f}",
+                }
+                for i, q in enumerate(saved_list)
+            ]
+        )
         st.dataframe(saved_df, use_container_width=True, hide_index=True)
 
         # 삭제 기능
@@ -1908,7 +2042,7 @@ if rows:
                 del_idx = st.selectbox(
                     "삭제할 타입 선택",
                     options=range(len(saved_list)),
-                    format_func=lambda x: f"{x+1}. {saved_list[x]['name']} ({saved_list[x]['spec']})"
+                    format_func=lambda x: f"{x+1}. {saved_list[x]['name']} ({saved_list[x]['spec']})",
                 )
                 if st.button("🗑️ 선택 항목 삭제"):
                     del st.session_state[SAVED_QUOTATIONS_KEY][del_idx]
@@ -1923,14 +2057,26 @@ if rows:
 
         # 총 세대수 및 총 금액 합계 (생산관리비, 영업관리비 포함)
         total_all_units = sum(q["units"] for q in saved_list)
-        total_all_amount = sum(q.get("final_total", q["total"]) * q["units"] for q in saved_list)
+        total_all_amount = sum(
+            q.get("final_total", q["total"]) * q["units"] for q in saved_list
+        )
         total_all_cost = sum(q["total"] * q["units"] for q in saved_list)
-        total_all_mgmt = sum(q.get("total_mgmt_fee", 0) * q["units"] for q in saved_list)
-        total_all_sales = sum(q.get("sales_mgmt_fee", 0) * q["units"] for q in saved_list if q.get("sales_mgmt_enabled", False))
+        total_all_mgmt = sum(
+            q.get("total_mgmt_fee", 0) * q["units"] for q in saved_list
+        )
+        total_all_sales = sum(
+            q.get("sales_mgmt_fee", 0) * q["units"]
+            for q in saved_list
+            if q.get("sales_mgmt_enabled", False)
+        )
         if total_all_sales > 0:
-            st.markdown(f"**총 세대수: {total_all_units}세대 | 원가합계: {total_all_cost:,.0f}원 | 생산관리비: {total_all_mgmt:,.0f}원 | 영업관리비: {total_all_sales:,.0f}원 | 최종합계: {total_all_amount:,.0f}원**")
+            st.markdown(
+                f"**총 세대수: {total_all_units}세대 | 원가합계: {total_all_cost:,.0f}원 | 생산관리비: {total_all_mgmt:,.0f}원 | 영업관리비: {total_all_sales:,.0f}원 | 최종합계: {total_all_amount:,.0f}원**"
+            )
         else:
-            st.markdown(f"**총 세대수: {total_all_units}세대 | 원가합계: {total_all_cost:,.0f}원 | 생산관리비합계: {total_all_mgmt:,.0f}원 | 최종합계: {total_all_amount:,.0f}원**")
+            st.markdown(
+                f"**총 세대수: {total_all_units}세대 | 원가합계: {total_all_cost:,.0f}원 | 생산관리비합계: {total_all_mgmt:,.0f}원 | 최종합계: {total_all_amount:,.0f}원**"
+            )
 
     st.markdown("---")
 
@@ -1955,7 +2101,11 @@ if rows:
                 category_order[cat] = i
         df = df.copy()
         df["_sort_key"] = df["품목"].map(category_order)
-        df = df.sort_values("_sort_key").drop(columns=["_sort_key"]).reset_index(drop=True)
+        df = (
+            df.sort_values("_sort_key")
+            .drop(columns=["_sort_key"])
+            .reset_index(drop=True)
+        )
 
         wb = Workbook()
         ws = wb.active
@@ -2103,19 +2253,19 @@ if rows:
             left=Side(style="thin"),
             right=Side(style="thin"),
             top=Side(style="thin"),
-            bottom=Side(style=None)
+            bottom=Side(style=None),
         )
         middle_border = Border(
             left=Side(style="thin"),
             right=Side(style="thin"),
             top=Side(style=None),
-            bottom=Side(style=None)
+            bottom=Side(style=None),
         )
         bottom_only_border = Border(
             left=Side(style="thin"),
             right=Side(style="thin"),
             top=Side(style=None),
-            bottom=Side(style="thin")
+            bottom=Side(style="thin"),
         )
 
         for idx, row_data in df.iterrows():
@@ -2242,14 +2392,28 @@ if rows:
             row_num += 1  # 빈 행
 
             # 생산관리비 섹션 제목
-            ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=START_COL + 7)
+            ws.merge_cells(
+                start_row=row_num,
+                start_column=START_COL,
+                end_row=row_num,
+                end_column=START_COL + 7,
+            )
             ws.cell(row=row_num, column=START_COL).value = "생산관리비 카테고리별 합계"
             ws.cell(row=row_num, column=START_COL).font = subtitle_font
             ws.cell(row=row_num, column=START_COL).alignment = center_align
             row_num += 1
 
             # 헤더 행
-            mgmt_headers = ["카테고리", "", "소계", "비율(%)", "생산관리비", "", "", "총계"]
+            mgmt_headers = [
+                "카테고리",
+                "",
+                "소계",
+                "비율(%)",
+                "생산관리비",
+                "",
+                "",
+                "총계",
+            ]
             for idx, h in enumerate(mgmt_headers):
                 cell = ws.cell(row=row_num, column=START_COL + idx)
                 cell.value = h
@@ -2262,11 +2426,18 @@ if rows:
             for cat_name, cat_info in prod_mgmt_settings.items():
                 subtotal = category_subtotals.get(cat_name, 0)
                 rate = cat_info.get("rate", 0.0)
-                mgmt_fee = category_mgmt_fees.get(cat_name, 0) if category_mgmt_fees else 0
+                mgmt_fee = (
+                    category_mgmt_fees.get(cat_name, 0) if category_mgmt_fees else 0
+                )
                 cat_total = subtotal + mgmt_fee
 
                 # 카테고리명 (2칸 병합)
-                ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=START_COL + 1)
+                ws.merge_cells(
+                    start_row=row_num,
+                    start_column=START_COL,
+                    end_row=row_num,
+                    end_column=START_COL + 1,
+                )
                 ws.cell(row=row_num, column=START_COL).value = cat_name
                 ws.cell(row=row_num, column=START_COL).font = data_font
                 ws.cell(row=row_num, column=START_COL).alignment = left_align
@@ -2310,7 +2481,12 @@ if rows:
                 row_num += 1
 
             # 생산관리비 합계 행
-            ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=START_COL + 1)
+            ws.merge_cells(
+                start_row=row_num,
+                start_column=START_COL,
+                end_row=row_num,
+                end_column=START_COL + 1,
+            )
             ws.cell(row=row_num, column=START_COL).value = "생산관리비 합계"
             ws.cell(row=row_num, column=START_COL).font = header_font
             ws.cell(row=row_num, column=START_COL).alignment = center_align
@@ -2337,8 +2513,15 @@ if rows:
 
             # 최종 총계 행
             row_num += 1
-            ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=START_COL + 3)
-            ws.cell(row=row_num, column=START_COL).value = "최종 총계 (원가 + 생산관리비)"
+            ws.merge_cells(
+                start_row=row_num,
+                start_column=START_COL,
+                end_row=row_num,
+                end_column=START_COL + 3,
+            )
+            ws.cell(row=row_num, column=START_COL).value = (
+                "최종 총계 (원가 + 생산관리비)"
+            )
             ws.cell(row=row_num, column=START_COL).font = header_font
             ws.cell(row=row_num, column=START_COL).alignment = center_align
             ws.cell(row=row_num, column=START_COL).border = thin_border
@@ -2450,7 +2633,9 @@ if rows:
         DATA_START_COL = 3  # 첫 번째 세대 타입의 수량 컬럼
 
         # 1행: 타이틀
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2 + num_types * 3 + 1)
+        ws.merge_cells(
+            start_row=1, start_column=1, end_row=1, end_column=2 + num_types * 3 + 1
+        )
         ws.cell(1, 1).value = "욕실 원자재 세대당 단가 내역"
         ws.cell(1, 1).font = title_font
         ws.cell(1, 1).alignment = center_align
@@ -2460,8 +2645,12 @@ if rows:
         total_all_units = sum(q["units"] for q in saved_quotations)
         ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=2)
         ws.cell(4, 1).font = header_font
-        ws.merge_cells(start_row=4, start_column=DATA_START_COL + num_types * 3 - 2,
-                       end_row=4, end_column=DATA_START_COL + num_types * 3)
+        ws.merge_cells(
+            start_row=4,
+            start_column=DATA_START_COL + num_types * 3 - 2,
+            end_row=4,
+            end_column=DATA_START_COL + num_types * 3,
+        )
         date_col = DATA_START_COL + num_types * 3 - 2
         ws.cell(4, date_col).value = f"총수량: {total_all_units}개"
         ws.cell(4, date_col).font = header_font
@@ -2481,7 +2670,9 @@ if rows:
         for i, q in enumerate(saved_quotations):
             col_start = DATA_START_COL + i * 3
             # 3컬럼 병합
-            ws.merge_cells(start_row=5, start_column=col_start, end_row=5, end_column=col_start + 2)
+            ws.merge_cells(
+                start_row=5, start_column=col_start, end_row=5, end_column=col_start + 2
+            )
             ws.cell(5, col_start).value = f"◎ {q['name']}"
             ws.cell(5, col_start).font = header_font
             ws.cell(5, col_start).alignment = center_align
@@ -2503,7 +2694,9 @@ if rows:
 
         for i, q in enumerate(saved_quotations):
             col_start = DATA_START_COL + i * 3
-            ws.merge_cells(start_row=6, start_column=col_start, end_row=6, end_column=col_start + 2)
+            ws.merge_cells(
+                start_row=6, start_column=col_start, end_row=6, end_column=col_start + 2
+            )
             ws.cell(6, col_start).value = f"◎ 규격({q['spec']})  ◎ {q['units']}세대"
             ws.cell(6, col_start).font = small_font
             ws.cell(6, col_start).alignment = center_align
@@ -2569,19 +2762,19 @@ if rows:
             left=Side(style="thin"),
             right=Side(style="thin"),
             top=Side(style="thin"),
-            bottom=Side(style=None)
+            bottom=Side(style=None),
         )
         middle_border = Border(
             left=Side(style="thin"),
             right=Side(style="thin"),
             top=Side(style=None),
-            bottom=Side(style=None)
+            bottom=Side(style=None),
         )
         bottom_only_border = Border(
             left=Side(style="thin"),
             right=Side(style="thin"),
             top=Side(style=None),
-            bottom=Side(style="thin")
+            bottom=Side(style="thin"),
         )
 
         for 품목, 사양 in all_items:
@@ -2643,7 +2836,9 @@ if rows:
                 ws.cell(row=row_num, column=col_start + 1).border = thin_border
                 ws.cell(row=row_num, column=col_start + 1).number_format = "#,##0"
 
-                ws.cell(row=row_num, column=col_start + 2).value = amount if amount else 0
+                ws.cell(row=row_num, column=col_start + 2).value = (
+                    amount if amount else 0
+                )
                 ws.cell(row=row_num, column=col_start + 2).font = data_font
                 ws.cell(row=row_num, column=col_start + 2).alignment = right_align
                 ws.cell(row=row_num, column=col_start + 2).border = thin_border
@@ -2722,13 +2917,21 @@ if rows:
         # 공사 원가 조정 및 관리비 섹션 (이미지 형식)
         # ----------------------------
         # 생산관리비 정보가 있는지 확인
-        has_mgmt_fee = any(q.get("total_mgmt_fee", 0) > 0 or q.get("prod_mgmt_settings") for q in saved_quotations)
+        has_mgmt_fee = any(
+            q.get("total_mgmt_fee", 0) > 0 or q.get("prod_mgmt_settings")
+            for q in saved_quotations
+        )
 
         if has_mgmt_fee:
             row_num += 2
 
             # 섹션 타이틀: ◎ 공사 원가 조정 및 관리비
-            ws.merge_cells(start_row=row_num, start_column=START_COL, end_row=row_num, end_column=remark_col)
+            ws.merge_cells(
+                start_row=row_num,
+                start_column=START_COL,
+                end_row=row_num,
+                end_column=remark_col,
+            )
             ws.cell(row=row_num, column=START_COL).value = "◎ 공사 원가 조정 및 관리비"
             ws.cell(row=row_num, column=START_COL).font = header_font
             ws.cell(row=row_num, column=START_COL).alignment = left_align
@@ -2738,17 +2941,26 @@ if rows:
             # 카테고리 그룹 정의 (이미지에 맞춘 구조)
             # 그룹: (그룹명, [(카테고리키, 표시명), ...])
             mgmt_groups = [
-                ("회사 생산관리비", [
-                    ("회사생산품(바닥판,욕조)", "바닥판, 욕조(20~25%)"),
-                    ("회사생산품(천장판)", "천장판(15~20%)"),
-                ]),
-                ("명진 생산관리비", [
-                    ("회사-명진(벽,PVE바닥판)", "PVE바닥판, 타일벽체(15~20%)"),
-                ]),
-                ("타사 구매품", [
-                    ("타사(천장,바닥판,타일)", "바닥판, 타일(5~10%)"),
-                    ("타사(도기,수전,기타)", "도기, 수전류, 기타(5~10%)"),
-                ]),
+                (
+                    "회사 생산관리비",
+                    [
+                        ("회사생산품(바닥판,욕조)", "바닥판, 욕조(20~25%)"),
+                        ("회사생산품(천장판)", "천장판(15~20%)"),
+                    ],
+                ),
+                (
+                    "명진 생산관리비",
+                    [
+                        ("회사-명진(벽,PVE바닥판)", "PVE바닥판, 타일벽체(15~20%)"),
+                    ],
+                ),
+                (
+                    "타사 구매품",
+                    [
+                        ("타사(천장,바닥판,타일)", "바닥판, 타일(5~10%)"),
+                        ("타사(도기,수전,기타)", "도기, 수전류, 기타(5~10%)"),
+                    ],
+                ),
             ]
 
             # 카테고리별 데이터를 first quotation 기준으로 수집
@@ -2778,13 +2990,21 @@ if rows:
                                 start_row=start_row_for_group,
                                 start_column=START_COL,
                                 end_row=start_row_for_group + num_rows - 1,
-                                end_column=START_COL
+                                end_column=START_COL,
                             )
-                        ws.cell(row=start_row_for_group, column=START_COL).value = group_name
-                        ws.cell(row=start_row_for_group, column=START_COL).font = data_font
-                        ws.cell(row=start_row_for_group, column=START_COL).alignment = center_align
+                        ws.cell(row=start_row_for_group, column=START_COL).value = (
+                            group_name
+                        )
+                        ws.cell(row=start_row_for_group, column=START_COL).font = (
+                            data_font
+                        )
+                        ws.cell(row=start_row_for_group, column=START_COL).alignment = (
+                            center_align
+                        )
                         # 병합된 셀의 테두리 설정
-                        for r in range(start_row_for_group, start_row_for_group + num_rows):
+                        for r in range(
+                            start_row_for_group, start_row_for_group + num_rows
+                        ):
                             ws.cell(row=r, column=START_COL).border = thin_border
 
                     # 카테고리 표시명
@@ -2809,16 +3029,26 @@ if rows:
                         ws.cell(row=row_num, column=col_start + 1).border = thin_border
 
                         # 생산관리비
-                        ws.cell(row=row_num, column=col_start + 2).value = mgmt_fee if mgmt_fee else ""
+                        ws.cell(row=row_num, column=col_start + 2).value = (
+                            mgmt_fee if mgmt_fee else ""
+                        )
                         ws.cell(row=row_num, column=col_start + 2).font = data_font
-                        ws.cell(row=row_num, column=col_start + 2).alignment = right_align
+                        ws.cell(row=row_num, column=col_start + 2).alignment = (
+                            right_align
+                        )
                         ws.cell(row=row_num, column=col_start + 2).border = thin_border
                         if mgmt_fee:
-                            ws.cell(row=row_num, column=col_start + 2).number_format = "#,##0"
+                            ws.cell(row=row_num, column=col_start + 2).number_format = (
+                                "#,##0"
+                            )
 
                     # 비고 (각 행별 합계 표시)
-                    row_total = sum(get_cat_data(q, cat_key)[1] for q in saved_quotations)
-                    ws.cell(row=row_num, column=remark_col).value = row_total if row_total else ""
+                    row_total = sum(
+                        get_cat_data(q, cat_key)[1] for q in saved_quotations
+                    )
+                    ws.cell(row=row_num, column=remark_col).value = (
+                        row_total if row_total else ""
+                    )
                     ws.cell(row=row_num, column=remark_col).font = data_font
                     ws.cell(row=row_num, column=remark_col).alignment = right_align
                     ws.cell(row=row_num, column=remark_col).border = thin_border
@@ -2828,9 +3058,13 @@ if rows:
                     row_num += 1
 
             # 설치(AS) 관리비(15% 고정) 행 - 영업관리비가 있는 경우
-            has_sales_fee = any(q.get("sales_mgmt_enabled", False) for q in saved_quotations)
+            has_sales_fee = any(
+                q.get("sales_mgmt_enabled", False) for q in saved_quotations
+            )
             if has_sales_fee:
-                ws.cell(row=row_num, column=START_COL).value = "설치(AS) 관리비(15% 고정)"
+                ws.cell(row=row_num, column=START_COL).value = (
+                    "설치(AS) 관리비(15% 고정)"
+                )
                 ws.cell(row=row_num, column=START_COL).font = data_font
                 ws.cell(row=row_num, column=START_COL).alignment = left_align
                 ws.cell(row=row_num, column=START_COL).border = thin_border
@@ -2840,9 +3074,15 @@ if rows:
                 for i, q in enumerate(saved_quotations):
                     col_start = DATA_START_COL + i * 3
                     sales_rate = q.get("sales_mgmt_rate", 0)
-                    sales_fee = q.get("sales_mgmt_fee", 0) if q.get("sales_mgmt_enabled", False) else 0
+                    sales_fee = (
+                        q.get("sales_mgmt_fee", 0)
+                        if q.get("sales_mgmt_enabled", False)
+                        else 0
+                    )
 
-                    ws.cell(row=row_num, column=col_start).value = f"{sales_rate}%" if sales_fee else ""
+                    ws.cell(row=row_num, column=col_start).value = (
+                        f"{sales_rate}%" if sales_fee else ""
+                    )
                     ws.cell(row=row_num, column=col_start).font = small_font
                     ws.cell(row=row_num, column=col_start).alignment = right_align
                     ws.cell(row=row_num, column=col_start).border = thin_border
@@ -2850,15 +3090,25 @@ if rows:
                     ws.cell(row=row_num, column=col_start + 1).value = ""
                     ws.cell(row=row_num, column=col_start + 1).border = thin_border
 
-                    ws.cell(row=row_num, column=col_start + 2).value = sales_fee if sales_fee else ""
+                    ws.cell(row=row_num, column=col_start + 2).value = (
+                        sales_fee if sales_fee else ""
+                    )
                     ws.cell(row=row_num, column=col_start + 2).font = data_font
                     ws.cell(row=row_num, column=col_start + 2).alignment = right_align
                     ws.cell(row=row_num, column=col_start + 2).border = thin_border
                     if sales_fee:
-                        ws.cell(row=row_num, column=col_start + 2).number_format = "#,##0"
+                        ws.cell(row=row_num, column=col_start + 2).number_format = (
+                            "#,##0"
+                        )
 
-                total_sales = sum(q.get("sales_mgmt_fee", 0) for q in saved_quotations if q.get("sales_mgmt_enabled", False))
-                ws.cell(row=row_num, column=remark_col).value = total_sales if total_sales else ""
+                total_sales = sum(
+                    q.get("sales_mgmt_fee", 0)
+                    for q in saved_quotations
+                    if q.get("sales_mgmt_enabled", False)
+                )
+                ws.cell(row=row_num, column=remark_col).value = (
+                    total_sales if total_sales else ""
+                )
                 ws.cell(row=row_num, column=remark_col).font = data_font
                 ws.cell(row=row_num, column=remark_col).alignment = right_align
                 ws.cell(row=row_num, column=remark_col).border = thin_border
@@ -2900,7 +3150,11 @@ if rows:
             for i, q in enumerate(saved_quotations):
                 col_start = DATA_START_COL + i * 3
                 mgmt_fee = q.get("total_mgmt_fee", 0)
-                sales_fee = q.get("sales_mgmt_fee", 0) if q.get("sales_mgmt_enabled", False) else 0
+                sales_fee = (
+                    q.get("sales_mgmt_fee", 0)
+                    if q.get("sales_mgmt_enabled", False)
+                    else 0
+                )
                 subtotal = mgmt_fee + sales_fee
                 total_all_mgmt += mgmt_fee
                 total_all_sales += sales_fee
@@ -2917,7 +3171,9 @@ if rows:
                 ws.cell(row=row_num, column=col_start + 2).border = thin_border
                 ws.cell(row=row_num, column=col_start + 2).number_format = "#,##0"
 
-            ws.cell(row=row_num, column=remark_col).value = total_all_mgmt + total_all_sales
+            ws.cell(row=row_num, column=remark_col).value = (
+                total_all_mgmt + total_all_sales
+            )
             ws.cell(row=row_num, column=remark_col).font = header_font
             ws.cell(row=row_num, column=remark_col).alignment = right_align
             ws.cell(row=row_num, column=remark_col).border = thin_border
@@ -2953,7 +3209,9 @@ if rows:
                 ws.cell(row=row_num, column=col_start + 2).number_format = "#,##0"
 
             # 녹색 배경의 최종 합계
-            green_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
+            green_fill = PatternFill(
+                start_color="90EE90", end_color="90EE90", fill_type="solid"
+            )
             ws.cell(row=row_num, column=remark_col).value = final_grand_total
             ws.cell(row=row_num, column=remark_col).font = header_font
             ws.cell(row=row_num, column=remark_col).alignment = right_align
@@ -2966,7 +3224,7 @@ if rows:
         ws.column_dimensions[get_column_letter(SPEC_COL)].width = 30
         for i in range(num_types):
             col_start = DATA_START_COL + i * 3
-            ws.column_dimensions[get_column_letter(col_start)].width = 7      # 수량
+            ws.column_dimensions[get_column_letter(col_start)].width = 7  # 수량
             ws.column_dimensions[get_column_letter(col_start + 1)].width = 10  # 단가
             ws.column_dimensions[get_column_letter(col_start + 2)].width = 12  # 금액
         ws.column_dimensions[get_column_letter(remark_col)].width = 15

@@ -44,8 +44,8 @@ in_nav = true
 order = 4
 
 [[pages]]
-path = "pages/chatbot.py"
-name = "챗봇"
+path = "pages/0_AI_시방서_분석.py"
+name = "AI 시방서 분석"
 icon = "💬"
 in_nav = true
 order = 5

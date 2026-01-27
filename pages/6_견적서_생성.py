@@ -808,62 +808,81 @@ if comparison or pending_items:
     # 추가 대기 품목 표시
     if pending_items:
         st.markdown("#### 📋 추가 대기 품목")
-        for idx, item in enumerate(pending_items):
-            col1, col2, col3 = st.columns([3, 1.5, 0.5])
-            with col1:
-                st.write(
-                    f"• **{item.get('name', '')}** - {item.get('source', '')[:40] if item.get('source') else ''}"
-                )
-            with col2:
-                # 수량 입력 필드 (기본값 1)
-                new_qty = st.number_input(
-                    "수량",
-                    min_value=1,
-                    value=item.get("qty") or 1,
-                    key=f"qty_pending_{idx}_{item.get('name', '')}",
-                    label_visibility="collapsed",
-                )
-                # 수량 변경 시 반영
-                if new_qty != item.get("qty"):
-                    pending_items[idx]["qty"] = new_qty
-                    st.session_state[AI_PENDING_ITEMS_KEY] = pending_items
-            with col3:
-                if st.button("🗑", key=f"est_del_{idx}_{item.get('name', '')}"):
-                    pending_items.pop(idx)
-                    st.session_state[AI_PENDING_ITEMS_KEY] = pending_items
-                    st.rerun()
+        st.caption("각 항목의 대분류/중분류/사양을 지정하여 견적서에 추가하세요.")
 
-        st.markdown("---")
-        col_add1, col_add2 = st.columns(2)
-        with col_add1:
-            if st.button(
-                "✅ 모두 견적서에 추가", use_container_width=True, type="primary"
-            ):
-                # CUSTOM_ITEMS에 추가
-                custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
-                added_count = 0
-                for item in pending_items:
-                    # 중복 체크
-                    existing_names = [c.get("name", "").lower() for c in custom_items]
-                    if item.get("name", "").lower() not in existing_names:
-                        custom_items.append(
-                            {
-                                "category": "AI탐지",
-                                "name": item.get("name", ""),
-                                "spec": item.get("spec", ""),
-                                "qty": item.get("qty") or 1,
+        items_to_remove = []
+        for idx, item in enumerate(pending_items):
+            with st.expander(f"📦 {item.get('name', '')} (출처: {item.get('source', '')[:30]}...)", expanded=False):
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
+
+                with col1:
+                    item_major = st.text_input(
+                        "대분류",
+                        value=item.get("major", ""),
+                        key=f"ai_major_{idx}",
+                        placeholder="예: 오배수배관"
+                    )
+
+                with col2:
+                    item_sub = st.text_input(
+                        "중분류",
+                        value=item.get("sub", ""),
+                        key=f"ai_sub_{idx}",
+                        placeholder="예: PVC본드"
+                    )
+
+                with col3:
+                    item_spec = st.text_input(
+                        "사양 및 규격",
+                        value=item.get("spec", ""),
+                        key=f"ai_spec_{idx}",
+                        placeholder="예: 1kg"
+                    )
+
+                with col4:
+                    item_qty = st.number_input(
+                        "수량",
+                        min_value=0.0,
+                        value=float(item.get("qty") or 1),
+                        step=0.5,
+                        key=f"ai_qty_{idx}"
+                    )
+
+                with col5:
+                    st.write("")  # 공백
+                    st.write("")  # 레이블 높이 맞추기
+                    if st.button("➕ 추가", key=f"ai_add_{idx}", use_container_width=True, type="primary"):
+                        if item_major.strip():
+                            custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
+                            custom_items.append({
+                                "major": item_major.strip(),
+                                "sub": item_sub.strip(),
+                                "spec": item_spec.strip(),
+                                "qty": item_qty,
                                 "source": "AI_DETECTED",
-                            }
-                        )
-                        added_count += 1
-                st.session_state[CUSTOM_ITEMS_KEY] = custom_items
-                st.session_state[AI_PENDING_ITEMS_KEY] = []
-                st.success(f"✅ {added_count}개 품목이 견적서에 추가되었습니다!")
-                st.rerun()
-        with col_add2:
-            if st.button("🗑 대기 목록 비우기", use_container_width=True):
-                st.session_state[AI_PENDING_ITEMS_KEY] = []
-                st.rerun()
+                            })
+                            st.session_state[CUSTOM_ITEMS_KEY] = custom_items
+                            items_to_remove.append(idx)
+                            st.success(f"✅ '{item_major}' 추가됨!")
+                        else:
+                            st.warning("⚠️ 대분류는 필수입니다.")
+
+                col_del, _ = st.columns([1, 4])
+                with col_del:
+                    if st.button("🗑 삭제", key=f"ai_del_{idx}", use_container_width=True):
+                        items_to_remove.append(idx)
+
+        # 삭제할 항목 처리
+        if items_to_remove:
+            for idx in sorted(items_to_remove, reverse=True):
+                pending_items.pop(idx)
+            st.session_state[AI_PENDING_ITEMS_KEY] = pending_items
+            st.rerun()
+
+        # 대기 목록 비우기 버튼
+        if st.button("🗑 대기 목록 모두 비우기", use_container_width=False):
+            st.session_state[AI_PENDING_ITEMS_KEY] = []
+            st.rerun()
 
     # 추가 검토 필요 품목 (아직 대기 목록에 없는 것들)
     if comparison:
@@ -1068,6 +1087,11 @@ else:
                         if subcategory not in edited_items[major_category]:
                             edited_items[major_category][subcategory] = {}
 
+                        # 디버깅: specs 확인
+                        if not specs:
+                            st.warning(f"⚠️ '{subcategory}'에 규격이 없습니다. Excel의 '자동지정항목' 시트를 확인하세요.")
+                            continue
+
                         default_selected = [
                             s for s in specs
                             if edited_items.get(major_category, {}).get(subcategory, {}).get(s, 0) > 0
@@ -1150,46 +1174,63 @@ else:
         st.caption("품목명을 입력하여 추가하세요.")
 
         for idx, sent in enumerate(quote_sentences):
-            with st.container():
+            with st.expander(f"📄 {sent.get('sentence', '')[:50]}...", expanded=False):
                 st.info(f"**문장:** {sent.get('sentence', '')}")
                 if sent.get("context"):
                     st.caption(f"상황: {sent.get('context', '')}")
 
                 # AI가 추출한 품목 제안
                 suggested_items = sent.get("items", [])
-                col1, col2, col3 = st.columns([2, 1, 1])
+                default_name = suggested_items[0] if suggested_items else ""
+
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
                 with col1:
-                    # 제안된 품목 또는 직접 입력
-                    default_name = suggested_items[0] if suggested_items else ""
-                    item_name = st.text_input(
-                        "품목명",
-                        value=default_name,
-                        key=f"quote_item_{idx}",
-                        placeholder="품목명 입력",
+                    item_major = st.text_input(
+                        "대분류",
+                        key=f"quote_major_{idx}",
+                        placeholder="예: 오배수배관"
                     )
                 with col2:
-                    item_qty = st.number_input(
-                        "수량", min_value=1, value=1, key=f"quote_qty_{idx}"
+                    item_sub = st.text_input(
+                        "중분류",
+                        value=default_name,
+                        key=f"quote_sub_{idx}",
+                        placeholder="예: PVC본드"
                     )
                 with col3:
+                    item_spec = st.text_input(
+                        "사양 및 규격",
+                        key=f"quote_spec_{idx}",
+                        placeholder="예: 1kg"
+                    )
+                with col4:
+                    item_qty = st.number_input(
+                        "수량",
+                        min_value=0.0,
+                        value=1.0,
+                        step=0.5,
+                        key=f"quote_qty_{idx}"
+                    )
+                with col5:
+                    st.write("")  # 공백
+                    st.write("")  # 레이블 높이 맞추기
                     if st.button(
-                        "추가", key=f"quote_add_{idx}", use_container_width=True
+                        "➕ 추가", key=f"quote_add_{idx}", use_container_width=True, type="primary"
                     ):
-                        if item_name.strip():
+                        if item_major.strip():
                             custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
-                            custom_items.append(
-                                {
-                                    "category": "견적포함",
-                                    "name": item_name.strip(),
-                                    "qty": item_qty,
-                                    "source": sent.get("sentence", "")[:50],
-                                }
-                            )
+                            custom_items.append({
+                                "major": item_major.strip(),
+                                "sub": item_sub.strip(),
+                                "spec": item_spec.strip(),
+                                "qty": item_qty,
+                                "source": sent.get("sentence", "")[:50],
+                            })
                             st.session_state[CUSTOM_ITEMS_KEY] = custom_items
-                            st.success(f"'{item_name}' 추가됨!")
+                            st.success(f"✅ '{item_major}' 추가됨!")
                             st.rerun()
                         else:
-                            st.warning("품목명을 입력하세요.")
+                            st.warning("⚠️ 대분류는 필수입니다.")
 
     # ═══════════════════════════════════════════════════════════════
     # 사용자 정의 품목 추가

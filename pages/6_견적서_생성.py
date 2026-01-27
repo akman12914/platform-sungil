@@ -7,7 +7,7 @@ import auth
 
 import json
 import io
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 import pandas as pd
 import streamlit as st
@@ -119,35 +119,116 @@ def load_pricebook_from_excel(
     file_bytes: bytes, sheet_name: str = "자재단가내역"
 ) -> pd.DataFrame:
     df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name)
-    # Normalize columns
+    # Normalize columns - 정확히 "대분류", "중분류", "사양 및 규격"만 인식
     colmap = {}
     for c in df.columns:
         c2 = str(c).strip()
-        if c2 in ["품목", "폼목"]:
+        if c2 == "대분류":
             colmap[c] = "품목"
-        elif c2 in ["분류"]:
+        elif c2 == "중분류":
             colmap[c] = "분류"
-        elif c2 in ["사양 및 규격", "사양", "규격"]:
+        elif c2 == "사양 및 규격":
             colmap[c] = "사양 및 규격"
-        elif c2 in ["단가"]:
+        elif c2 == "단가":
             colmap[c] = "단가"
-        elif c2 in ["수량"]:
+        elif c2 == "수량":
             colmap[c] = "수량"
-        elif c2 in ["금액"]:
+        elif c2 == "금액":
             colmap[c] = "금액"
     df = df.rename(columns=colmap)
     # Ensure required columns exist
-    for c in ["품목", "분류", "사양 및 규격", "단가", "수량"]:
+    for c in ["품목", "분류", "사양 및 규격"]:
         if c not in df.columns:
-            df[c] = None
+            df[c] = ""
+    for c in ["단가", "수량"]:
+        if c not in df.columns:
+            df[c] = 0
     # Clean values
     for c in ["품목", "분류", "사양 및 규격"]:
-        df[c] = df[c].astype(str).str.strip()
+        df[c] = df[c].fillna("").astype(str).str.strip()
     for c in ["단가", "수량"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     if "금액" not in df.columns:
         df["금액"] = df["단가"].fillna(0) * df["수량"].fillna(0)
     return df
+
+
+@st.cache_data(show_spinner=False)
+def load_auto_items_structure(file_bytes: bytes) -> Dict[str, Any]:
+    """
+    Excel의 '자동지정항목' 시트에서 자동지정 품목 구조를 로드
+
+    시트 구조:
+    - 대분류: 품목의 대분류
+    - 중분류: 품목의 중분류 (없으면 NaN)
+    - 사양 및 규격: 품목의 규격 (없으면 NaN)
+
+    Returns:
+        {
+            "대분류명": {
+                "subcategories": {중분류: [규격1, 규격2]} 또는 None,
+                "category_map": "대분류명"
+            }
+        }
+    """
+    try:
+        df = pd.read_excel(io.BytesIO(file_bytes), sheet_name="자동지정항목")
+    except Exception:
+        # 시트가 없으면 빈 딕셔너리 반환
+        return {}
+
+    # 컬럼명 확인
+    if "대분류" not in df.columns:
+        return {}
+
+    # NaN 처리
+    df = df.copy()
+    df["대분류"] = df["대분류"].fillna("").astype(str).str.strip()
+    df["중분류"] = df.get("중분류", pd.Series()).fillna("").astype(str).str.strip()
+    df["사양 및 규격"] = df.get("사양 및 규격", pd.Series()).fillna("").astype(str).str.strip()
+
+    # 빈 대분류 제거
+    df = df[df["대분류"] != ""]
+
+    # 대분류별로 구조 생성
+    structure = {}
+
+    for major_cat in df["대분류"].unique():
+        rows = df[df["대분류"] == major_cat]
+
+        # 중분류가 모두 비어있는지 확인
+        has_subcategories = (rows["중분류"] != "").any()
+
+        if not has_subcategories:
+            # 케이스 1: 중분류 없음 (예: GRP바닥판)
+            structure[major_cat] = {
+                "subcategories": None,
+                "category_map": major_cat,
+            }
+        else:
+            # 케이스 2: 중분류 있음
+            subcategories = {}
+
+            for sub_cat in rows["중분류"].unique():
+                if sub_cat == "":
+                    continue
+
+                sub_rows = rows[rows["중분류"] == sub_cat]
+
+                # 사양 및 규격 리스트 생성 (빈 값 제외)
+                specs = [
+                    str(spec).strip() for spec in sub_rows["사양 및 규격"].tolist()
+                    if spec and str(spec).strip() and str(spec).strip().lower() != 'nan'
+                ]
+
+                subcategories[sub_cat] = specs
+
+            structure[major_cat] = {
+                "subcategories": subcategories,
+                "category_map": major_cat,
+            }
+
+    return structure
 
 
 @st.cache_data(show_spinner=False)
@@ -177,48 +258,58 @@ def load_ceiling_drilling_prices(file_bytes: bytes) -> Dict[str, float]:
 
 def find_item(
     df: pd.DataFrame,
-    품목: str,
-    item_name: str,
-    분류: Optional[str] = None,
-) -> Tuple[Optional[pd.Series], List[pd.Series]]:
+    대분류: str,
+    사양_및_규격_전체: str,
+) -> Optional[pd.Series]:
     """
-    단가표에서 품목 찾기 (2단계 검색)
-
-    1단계: A열(품목) + C열(사양 및 규격) 정확히 일치
-    2단계: A열(품목) + B열(분류) 정확히 일치 → C열이 다르면 선택지 반환
+    단가표에서 품목 찾기 (대분류 + 합쳐진 사양)
 
     Args:
         df: 단가표 DataFrame
-        품목: A열 값 (정확히 일치)
-        item_name: 검색할 품목명 (C열 또는 B열과 매칭)
-        분류: B열 값 (선택적, 지정시 B열도 정확히 일치해야 함)
+        대분류: 품목 값 (대분류)
+        사양_및_규격_전체: "중분류 사양및규격" 형식의 합쳐진 문자열
 
     Returns:
-        (매칭된 행 또는 None, 선택 가능한 규격 목록)
+        매칭된 행 또는 None
     """
-    search_term = str(item_name).strip().lower()
+    대분류_term = str(대분류).strip()
+    사양_term = str(사양_및_규격_전체).strip()
 
-    # 1단계: A열(품목) + C열(사양 및 규격) 정확히 일치
-    q1 = (df["품목"] == 품목) & (df["사양 및 규격"].str.strip().str.lower() == search_term)
-    if 분류 is not None:
-        q1 &= df["분류"].str.strip().str.lower() == str(분류).strip().lower()
-    candidates1 = df[q1]
-    if len(candidates1) > 0:
-        return candidates1.iloc[0], []
+    # 대분류 필터링 (대소문자 구분 없음)
+    대분류_matches = df[df["품목"].fillna("").astype(str).str.strip().str.lower() == 대분류_term.lower()]
 
-    # 2단계: A열(품목) + B열(분류) 정확히 일치 (분류가 지정되지 않은 경우만)
-    if 분류 is None:
-        q2 = (df["품목"] == 품목) & (df["분류"].str.strip().str.lower() == search_term)
-        candidates2 = df[q2]
-        if len(candidates2) > 0:
-            if len(candidates2) == 1:
-                # 규격이 하나뿐이면 바로 반환
-                return candidates2.iloc[0], []
-            else:
-                # 규격이 여러 개면 선택지 반환 (첫 번째를 기본값으로)
-                return candidates2.iloc[0], [candidates2.iloc[i] for i in range(len(candidates2))]
+    if len(대분류_matches) == 0:
+        return None
 
-    return None, []
+    # 사양이 없으면 첫 번째 매칭 반환
+    if not 사양_term:
+        return 대분류_matches.iloc[0]
+
+    # 단가표의 중분류 + 사양 및 규격을 합쳐서 비교
+    df_중분류 = 대분류_matches["분류"].fillna("").astype(str).str.strip()
+    df_사양 = 대분류_matches["사양 및 규격"].fillna("").astype(str).str.strip()
+
+    # 매칭 전략 1: 중분류 + " " + 사양 (공백 포함, 대소문자 구분 없음)
+    df_combined_space = (df_중분류 + " " + df_사양).str.strip()
+    mask1 = (df_combined_space.str.lower() == 사양_term.lower())
+
+    # 매칭 전략 2: 중분류 + 사양 (공백 없음, 대소문자 구분 없음)
+    df_combined_no_space = (df_중분류 + df_사양).str.strip()
+    mask2 = (df_combined_no_space.str.lower() == 사양_term.replace(" ", "").lower())
+
+    # 매칭 전략 3: 사양 및 규격만 매칭 (중분류 무시, 대소문자 구분 없음)
+    mask3 = (df_사양.str.lower() == 사양_term.lower())
+
+    # 매칭 전략 4: 포함 검색 (사양 및 규격이 검색어를 포함, 대소문자 구분 없음)
+    mask4 = df_combined_space.str.lower().str.contains(사양_term.lower(), regex=False, na=False)
+
+    # 우선순위대로 매칭 시도
+    for mask in [mask1, mask2, mask3, mask4]:
+        candidates = 대분류_matches[mask]
+        if len(candidates) > 0:
+            return candidates.iloc[0]
+
+    return None
 
 
 def add_row(
@@ -564,6 +655,7 @@ with st.sidebar:
 # Load pricebook
 price_df: Optional[pd.DataFrame] = None
 ceiling_drilling_prices: Dict[str, float] = {}
+NEW_AUTO_ITEMS_STRUCTURE: Dict[str, Any] = {}
 if pricebook_file is not None:
     try:
         # 파일 포인터를 처음으로 리셋 후 읽기
@@ -572,7 +664,20 @@ if pricebook_file is not None:
         pricebook_file.seek(0)  # 다른 곳에서 재사용할 수 있도록 다시 리셋
         price_df = load_pricebook_from_excel(file_bytes)
         ceiling_drilling_prices = load_ceiling_drilling_prices(file_bytes)
-        st.sidebar.success(f"단가표 로드 완료: {len(price_df)}행")
+        NEW_AUTO_ITEMS_STRUCTURE = load_auto_items_structure(file_bytes)
+        st.sidebar.success(f"단가표 로드 완료: {len(price_df)}행 (시트: 자재단가내역)")
+        st.sidebar.success(f"자동지정항목 로드 완료: {len(NEW_AUTO_ITEMS_STRUCTURE)}개 대분류")
+
+        # 디버깅: 로드된 구조 확인
+        if NEW_AUTO_ITEMS_STRUCTURE:
+            with st.sidebar.expander("📋 로드된 자동지정항목 구조", expanded=False):
+                for cat, info in NEW_AUTO_ITEMS_STRUCTURE.items():
+                    if info.get("subcategories") is None:
+                        st.write(f"- **{cat}**: 중분류 없음")
+                    else:
+                        st.write(f"- **{cat}**:")
+                        for sub, specs in info.get("subcategories", {}).items():
+                            st.write(f"  - {sub}: {len(specs)}개 규격 ({', '.join(specs[:3])}{'...' if len(specs) > 3 else ''})")
     except Exception as e:
         st.sidebar.error(f"단가표 로드 실패: {e}")
 
@@ -584,340 +689,104 @@ if pricebook_file is not None:
 AUTO_ITEMS_KEY = "auto_assigned_items"
 AUTO_FLOOR_TYPE_KEY = "auto_floor_type"
 AUTO_SHAPE_TYPE_KEY = "auto_shape_type"
-SELECT_ITEMS_KEY = "select_items"
-OPTIONAL_ITEMS_KEY = "optional_items"
 CUSTOM_ITEMS_KEY = "custom_items"  # 사용자 정의 품목
 
 # ═══════════════════════════════════════════════════════════════
 # 【A】 자동지정 품목 (기본 포함, 수량 편집 가능)
 # ═══════════════════════════════════════════════════════════════
 
-# 【A-1】 완전 고정 수량 (바닥판/규격/형태 무관)
-FIXED_QUANTITY_ITEMS = {
-    # ========== 오수/배수 배관류 ==========
-    "엘보(Φ100)": 1,
-    "엘보(Φ50)": 2,
-    "직관(Φ100)": 1,
-    "직관(Φ50)": 2,
-    "오수구덮개": 1,
-    "PVC접착제": 0.15,
-    "배수트랩(습식용)": 2,
-    "배수트랩(상하용)": 0,
-    "드레인커버(세면부)": 0,
-    "드레인커버(샤워부)": 0,
+# 【A-1】 자동지정 품목 구조는 Excel의 '자동지정항목' 시트에서 동적으로 로드됩니다
+# NEW_AUTO_ITEMS_STRUCTURE는 파일 업로드 시 load_auto_items_structure() 함수로 생성됩니다
 
-    # ========== 바닥판 - SMC/FRP ==========
-    "배수트랩(층하용)": 0,
-    "배수트랩 1구 가지관(층상용)": 0,
-    "배수트랩 2구 가지관(층상용)": 0,
-    "배수트랩 3구 가지관(층상용)": 0,
-    "드레인커버(세면부용)": 0,
-    "드레인커버(샤워실용)": 0,
-    "모래": 0,
-    "시멘트": 0,
-    "백시멘트(바닥용)": 1,
-
-    # ========== 바닥판 - PP/PE ==========
-    "배수트랩 습식용(층하용)": 0,
-    "배수트랩 습식용 1구 가지관(층상용)": 0,
-    "배수트랩 습식용 2구 가지관(층상용)": 2,
-    "배수트랩 습식용 3구 가지관(층상용)": 0,
-    "방통몰탈(레미콘)": 1,
-    "양변기(오수구) 소켓(Φ100)": 1,
-    "바닥 배수소켓(Φ50)": 1,
-    "욕조(세면기)배수 소켓": 0,
-    "난방배관 소켓(Φ16)": 2,
-    "클럽메쉬 세트(클립포함)": 1,
-    "배수구 편심소켓(Φ50)": 0,
-    "벽체코너 받침대": 5,
-    "볼트": 5,
-    "PVE바닥판 소켓 받침대": 1,
-    "압착시멘트(백시멘트)": 1,
-    "떠발이 몰탈": 1,
-    "심패드": 1,
-    "성형슬리브(오수)Φ125": 1,
-    "성형슬리브(세면,바닥,샤워)Φ175": 2,
-    "슬리브용 몰탈막음 스펀지": 3,
-    "세면,바닥,샤워 배수세트(Φ175)": 2,
-
-    # ========== 벽판 ==========
-    "PU벽판": 1,
-    "백시멘트(벽체용)": 1,
-    "PB 독립배관": 0,
-    "PB 세대 세트 배관": 1,
-    "PB+이중관(오픈수전함)": 0,
-
-    # ========== 타일 ==========
-    "벽타일(250×400)": 0,
-    "벽타일(300×600)": 0,
-    "바닥타일(200×200)": 0,
-    "바닥타일(300×300)": 0,
-
-    # ========== 천장판 ==========
-    "GRP천장판": 1,
-    "ABS천장판": 0,
-
-    # ========== 문세트 ==========
-    "PVC 4방문틀": 1,
-    "PVC 4방틀(130~230바)": 0,
-    "ABS 문짝": 1,
-    "도어하드웨어": 1,
-    "도어락": 1,
-    "경첩": 1,
-    "도어스토퍼": 1,
-
-    # ========== 포켓도어 ==========
-    "가틀": 0,
-    "본틀": 0,
-    "레일 및 뎀퍼": 0,
-    "오목손잡이 및 문틀받침대": 0,
-    "포켓도어 ABS 문짝": 0,
-    "포켓도어 레일": 0,
-    "포켓도어 댐퍼": 0,
-    "포켓도어 손잡이": 0,
-
-    # ========== 도기류 ==========
-    "양변기": 1,
-    "양변기(투피스)": 1,
-    "양변기(준피스)": 0,
-    "긴다리 세면기(원홀)": 0,
-    "세면샤워 겸용수전(원홀)": 0,
-    "폼업": 0,
-    "S트랩": 0,
-    "반다리 세면기(원홀)": 1,
-    "세면기 수전(반다리)": 1,
-    "세면샤워 겸용수전(반다리)": 0,
-    "폼업(반다리)": 1,
-    "P트랩": 1,
-    "벽배수 배관": 1,
-    "세면기 고정 볼트세트": 1,
-
-    # ========== 수전 ==========
-    "세면기 수전": 1,
-    "샤워수전": 1,
-    "슬라이드바": 1,
-    "레인 샤워수전": 0,
-    "선반형 레인 샤워수전": 0,
-    "청소건": 1,
-    "세탁기 수전": 0,
-
-    # ========== 욕실장 ==========
-    "PS장(600×900)": 0,
-    "슬라이딩 욕실장": 0,
-
-    # ========== 은경 ==========
-    "은경(거울)": 1,
-
-    # ========== 액세서리 ==========
-    "수건걸이": 1,
-    "휴지걸이": 1,
-    "일자유리선반": 1,
-    "코너선반": 1,
-    "매립형 휴지걸이": 0,
-    "청소솔": 1,
-    "2단 수건선반": 0,
-    "매립형 휴지걸이(비상폰)": 0,
-    "L형 손잡이": 0,
-    "ㅡ형 손잡이": 0,
-    "접의식 의자": 0,
-
-    # ========== 칸막이 ==========
-    "샤워부스 재료분리대(인조대리석)": 0,
-    "샤워파티션 재료분리대(인조대리석)": 0,
-
-    # ========== 욕실등 ==========
-    "욕실등": 0,
-    "원형등": 0,
-    "사각등": 0,
-    "원형 매립등": 0,
-    "천장 매립등(사각)": 0,
-    "천장 매립등(원형)": 1,
-    "벽부등": 0,
-
-    # ========== 욕조 ==========
-    "SQ욕조": 0,
-    "세라믹 욕조": 0,
-
-    # ========== 환기류 ==========
-    "환풍기": 1,
-    "후렉시블 호스": 1,
-    "서스밴드": 1,
-
-    # ========== 공통자재 ==========
-    "실리콘(내항균성)": 4.5,
-    "실리콘(외장용)": 1,
-    "우레탄폼": 0.5,
-    "이면지지클립": 1,
-    "타일 평탄클립": 1,
-    "에폭시 접착제": 1,
-    "백시멘트(공통)": 1,
-    "욕실등 내함": 1,
-    "콘센트 내함": 1,
-    "휴지걸이 내함": 1,
-    "도어실(문지방)": 1,
-    "젠다이상판": 0,
-    "젠다이 브라켓": 0,
-    "PVC보온재": 1,
-    "바닥타일 보양": 1,
-    "바닥타일 보양테이프": 1,
-    "슬리브 방수액": 1,
-    "재료분리대(SUS)": 0,
-    "재료분리대(인조대리석)": 0,
-
-    # ========== 가공 품목 (천장판 타공) - 마지막 배치 ==========
+# 천장판 타공 품목 (별도 유지)
+CEILING_DRILLING_ITEMS = {
     "환풍기홀": 1,
     "사각매립등": 0,
     "원형등 타공": 0,
     "직선 1회": 0,
 }
 
-# 【A-2】 형태(사각형/코너형)에 따라 달라지는 수량
-SHAPE_TYPE_ITEMS = {
-    "사각형": {
-        "코너마감재": 3,
-        "코너비드": 0,
-    },
-    "코너형": {
-        "코너마감재": 5,
-        "코너비드": 1,
-    },
-}
-
 # ═══════════════════════════════════════════════════════════════
 # 【B】 선택 유지 품목 (종류 선택 필요)
-# ═══════════════════════════════════════════════════════════════
-
-# 【B-1】 기본값 있음 (4개)
-SELECT_ITEMS_WITH_DEFAULT = {
-    "냉온수배관": {
-        "options": [
-            "선택안함",
-            "PB 독립배관",
-            "PB 세대 세트 배관",
-            "PB+이중관(오픈수전함)",
-        ],
-        "default": "PB+이중관(오픈수전함)",
-        "category": "냉온수배관",
-    },
-    "세면기": {
-        "options": ["선택안함", "긴다리 세면기", "반다리 세면기"],
-        "default": "긴다리 세면기",
-        "category": "도기류",
-    },
-    "욕실장": {
-        "options": ["선택안함", "욕실장(일반형)", "PS장(600*900)", "슬라이딩 욕실장"],
-        "default": "욕실장(일반형)",
-        "category": "욕실장",
-    },
-    "문틀규격": {
-        "options": [
-            "선택안함",
-            "110m/m",
-            "130m/m",
-            "140m/m",
-            "155m/m",
-            "175m/m",
-            "195m/m",
-            "210m/m",
-            "230m/m",
-        ],
-        "default": "선택안함",  # 필수 선택 (벽체 두께에 따라)
-        "category": "문세트",
-    },
-}
-
-# 【B-2】 기본값 = 선택안함 (옵션 품목, 12개)
-OPTIONAL_ITEMS = {
-    "칸막이": {
-        "options": ["선택안함", "샤워부스", "샤워파티션"],
-        "default": "선택안함",
-        "category": "칸막이",
-    },
-    "욕조": {
-        "options": ["선택안함", "SQ욕조", "세라믹 욕조"],
-        "default": "선택안함",
-        "category": "욕조",
-    },
-    "환기류": {
-        "options": ["선택안함", "환풍기", "후렉시블 호스, 서스밴드"],
-        "default": "선택안함",
-        "category": "환기류",
-    },
-    "도어스토퍼": {
-        "options": ["선택안함", "도어스토퍼"],
-        "default": "선택안함",
-        "category": "문세트",
-    },
-    "손끼임방지": {
-        "options": ["선택안함", "손끼임방지"],
-        "default": "선택안함",
-        "category": "문세트",
-    },
-    "청소건": {
-        "options": ["선택안함", "청소건"],
-        "default": "선택안함",
-        "category": "수전",
-    },
-    "레인샤워수전": {
-        "options": ["선택안함", "레인 샤워수전", "선반형 레인 샤워수전"],
-        "default": "선택안함",
-        "category": "수전",
-    },
-    "세탁기수전": {
-        "options": ["선택안함", "세탁기 수전"],
-        "default": "선택안함",
-        "category": "수전",
-    },
-    "매립형휴지걸이": {
-        "options": ["선택안함", "매립형 휴지걸이"],
-        "default": "선택안함",
-        "category": "액세서리",
-    },
-    "청소솔": {
-        "options": ["선택안함", "청소솔"],
-        "default": "선택안함",
-        "category": "액세서리",
-    },
-    "2단수건선반": {
-        "options": ["선택안함", "2단 수건선반"],
-        "default": "선택안함",
-        "category": "액세서리",
-    },
-    "욕실등(등기구)": {
-        "options": ["선택안함", "천장 매립등(사각)", "천장 매립등(원형)", "벽부등"],
-        "default": "선택안함",
-        "category": "욕실등",
-    },
-}
-
 # ═══════════════════════════════════════════════════════════════
 # 자동지정 품목 계산 함수
 # ═══════════════════════════════════════════════════════════════
 
 
-def calculate_auto_items(floor_type: str, shape_type: str) -> Dict[str, float]:
-    """바닥판 종류와 형태에 따라 자동지정 품목 수량 계산"""
-    items = FIXED_QUANTITY_ITEMS.copy()
+def calculate_auto_items(floor_type: str, shape_type: str) -> Dict[str, Any]:
+    """
+    바닥판 종류와 형태에 따라 자동지정 품목 초기값 계산
+    반환 형식: {대분류: {중분류: {규격: 수량}}}
+    """
+    result = {}
 
-    # 형태(사각형/코너형)에 따른 수량 조정
-    if shape_type in SHAPE_TYPE_ITEMS:
-        items.update(SHAPE_TYPE_ITEMS[shape_type])
-
-    # 타일 소요계산 결과 반영
+    # 타일 소요계산 결과 가져오기
     total_wall_tiles = st.session_state.get("shared_total_wall_tiles", 0)
     total_floor_tiles = st.session_state.get("shared_total_floor_tiles", 0)
-
-    # 벽타일 수량 업데이트 (벽판 타일 규격에 따라)
     wall_data = st.session_state.get("wall", {})
     tile_str = str(wall_data.get("벽타일", "")).replace("×", "x").replace(" ", "")
-    if tile_str in ["250x400", "250*400"]:
-        items["벽타일(250×400)"] = total_wall_tiles
-        items["바닥타일(200×200)"] = total_floor_tiles
-    else:
-        items["벽타일(300×600)"] = total_wall_tiles
-        items["바닥타일(300×300)"] = total_floor_tiles
 
-    return items
+    # 각 대분류별로 초기 수량 설정
+    for major_cat, config in NEW_AUTO_ITEMS_STRUCTURE.items():
+        result[major_cat] = {}
+
+        if config["subcategories"] is None:
+            # 중분류 없음 (예: GRP바닥판, FRP바닥판)
+            # 바닥판 종류에 따라 활성화
+            if major_cat == "GRP바닥판" and floor_type == "GRP":
+                result[major_cat]["_self"] = 1
+            elif major_cat == "FRP바닥판" and floor_type in ["FRP", "SMC"]:
+                result[major_cat]["_self"] = 1
+            else:
+                result[major_cat]["_self"] = 0
+        else:
+            # 중분류 있음
+            for subcat, specs in config["subcategories"].items():
+                if not specs:
+                    # 규격 없음 - 기본값 설정
+                    default_qty = 0
+
+                    # 특정 항목은 기본 1로 설정
+                    if subcat in ["PB이중관(오픈수전함)", "도어락", "경첩(스텐피스)", "스토퍼",
+                                  "양변기", "세면기", "세면기 수전", "겸용 수전", "샤워 수전"]:
+                        default_qty = 1
+
+                    # 타일류 수량 반영 (타일은 규격 없음)
+                    if major_cat == "타일류":
+                        if tile_str in ["250x400", "250*400"]:
+                            if subcat == "벽체용 타일 250*400":
+                                default_qty = total_wall_tiles
+                            elif subcat == "바닥용 타일 200*200":
+                                default_qty = total_floor_tiles
+                        else:
+                            if subcat == "벽체용 타일 300*600":
+                                default_qty = total_wall_tiles
+                            elif subcat == "바닥용 타일 300*300":
+                                default_qty = total_floor_tiles
+
+                    result[major_cat][subcat] = {"_self": default_qty}
+                else:
+                    # 규격 있음 - 각 규격별 초기값 0
+                    result[major_cat][subcat] = {spec: 0 for spec in specs}
+
+    # 형태별 조정 (사각형/코너형)
+    # 공통 및 부속자재 > 코너마감재, 코너비드
+    if "공통 및 부속자재" in result and "코너마감재(벽체 뒤쪽)" in result["공통 및 부속자재"]:
+        if shape_type == "사각형":
+            result["공통 및 부속자재"]["코너마감재(벽체 뒤쪽)"]["_self"] = 3
+        elif shape_type == "코너형":
+            result["공통 및 부속자재"]["코너마감재(벽체 뒤쪽)"]["_self"] = 5
+
+    if "공통 및 부속자재" in result and "코너비드(벽체 안쪽)" in result["공통 및 부속자재"]:
+        if shape_type == "사각형":
+            result["공통 및 부속자재"]["코너비드(벽체 안쪽)"]["17*17*2180"] = 0
+        elif shape_type == "코너형":
+            result["공통 및 부속자재"]["코너비드(벽체 안쪽)"]["17*17*2180"] = 1
+
+    # 천장판 타공 항목 추가
+    result["_drilling"] = CEILING_DRILLING_ITEMS.copy()
+
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1100,289 +969,176 @@ if floor_type_changed or shape_type_changed:
 if AUTO_ITEMS_KEY not in st.session_state:
     st.session_state[AUTO_ITEMS_KEY] = current_auto_items.copy()
 
-# ═══════════════════════════════════════════════════════════════
-# UI: 【B-1】 선택 유지 품목 (기본값 있음)
-# ═══════════════════════════════════════════════════════════════
-st.markdown("---")
-st.markdown("### 필수 선택 품목")
-st.caption("종류를 선택해야 하는 품목입니다. 기본값이 설정되어 있습니다.")
-
-# 선택값 초기화
-if SELECT_ITEMS_KEY not in st.session_state:
-    st.session_state[SELECT_ITEMS_KEY] = {
-        name: info["default"] for name, info in SELECT_ITEMS_WITH_DEFAULT.items()
-    }
-
-select_cols = st.columns(2)
-select_values = {}
-
-for idx, (name, info) in enumerate(SELECT_ITEMS_WITH_DEFAULT.items()):
-    with select_cols[idx % 2]:
-        options = info["options"]
-        default_val = st.session_state[SELECT_ITEMS_KEY].get(name, info["default"])
-        default_idx = options.index(default_val) if default_val in options else 0
-
-        selected = st.selectbox(
-            name, options=options, index=default_idx, key=f"select_{name}"
-        )
-        select_values[name] = selected
-
-st.session_state[SELECT_ITEMS_KEY] = select_values
-
-# ═══════════════════════════════════════════════════════════════
-# UI: 【B-2】 옵션 품목 (기본값 = 선택안함)
-# ═══════════════════════════════════════════════════════════════
-with st.expander("옵션 품목 (선택사항)", expanded=False):
-    st.caption("필요시 선택하세요. 기본값은 '선택안함'입니다.")
-
-    if OPTIONAL_ITEMS_KEY not in st.session_state:
-        st.session_state[OPTIONAL_ITEMS_KEY] = {
-            name: info["default"] for name, info in OPTIONAL_ITEMS.items()
-        }
-
-    opt_cols = st.columns(3)
-    opt_values = {}
-
-    for idx, (name, info) in enumerate(OPTIONAL_ITEMS.items()):
-        with opt_cols[idx % 3]:
-            options = info["options"]
-            default_val = st.session_state[OPTIONAL_ITEMS_KEY].get(
-                name, info["default"]
-            )
-            default_idx = options.index(default_val) if default_val in options else 0
-
-            selected = st.selectbox(
-                name, options=options, index=default_idx, key=f"opt_{name}"
-            )
-            opt_values[name] = selected
-
-    st.session_state[OPTIONAL_ITEMS_KEY] = opt_values
 
 # ═══════════════════════════════════════════════════════════════
 # UI: 【A】 자동지정 품목 수량 편집
 # ═══════════════════════════════════════════════════════════════
-with st.expander("자동지정 품목 수량 편집", expanded=False):
-    st.markdown("**기본 포함되는 품목의 수량을 편집할 수 있습니다.**")
-    st.caption(f"현재 설정: 바닥판={floor_type}, 형태={shape_type}")
+if not NEW_AUTO_ITEMS_STRUCTURE:
+    st.warning("⚠️ 자동지정 품목을 로드하려면 단가표 Excel 파일을 업로드하세요. (시트: '자동지정항목' 필요)")
+elif pricebook_file is None:
+    st.warning("⚠️ 단가표 파일이 업로드되지 않았습니다.")
+else:
+    with st.expander("자동지정 품목 수량 편집", expanded=False):
+        st.markdown("**기본 포함되는 품목의 수량을 편집할 수 있습니다.**")
+        st.caption(f"현재 설정: 바닥판={floor_type}, 형태={shape_type}")
 
-    if st.button("기본값으로 초기화", key="reset_auto_items"):
-        st.session_state[AUTO_ITEMS_KEY] = current_auto_items.copy()
-        st.success("기본값으로 초기화되었습니다.")
-        st.rerun()
+        # CSS 스타일: 규격 수량 입력 칸만 스타일 적용
+        st.markdown(
+            """
+            <style>
+            /* 규격 수량 입력 칸의 너비를 줄임 (columns 내부의 number_input만) */
+            div[data-testid="stExpander"] div[data-testid="column"] div[data-testid="stNumberInput"] {
+                max-width: 180px !important;
+            }
 
-    # 카테고리별 분류
-    auto_categories = {
-        "1. 바닥판 - SMC/FRP": [
-            "배수트랩(층하용)",
-            "배수트랩 1구 가지관(층상용)",
-            "배수트랩 2구 가지관(층상용)",
-            "배수트랩 3구 가지관(층상용)",
-            "드레인커버(세면부용)",
-            "드레인커버(샤워실용)",
-            "모래",
-            "시멘트",
-            "백시멘트(바닥용)",
-        ],
-        "2. 바닥판 - PP/PE": [
-            "배수트랩 습식용(층하용)",
-            "배수트랩 습식용 1구 가지관(층상용)",
-            "배수트랩 습식용 2구 가지관(층상용)",
-            "배수트랩 습식용 3구 가지관(층상용)",
-            "방통몰탈(레미콘)",
-            "양변기(오수구) 소켓(Φ100)",
-            "바닥 배수소켓(Φ50)",
-            "욕조(세면기)배수 소켓",
-            "난방배관 소켓(Φ16)",
-            "클럽메쉬 세트(클립포함)",
-            "배수구 편심소켓(Φ50)",
-            "벽체코너 받침대",
-            "볼트",
-            "PVE바닥판 소켓 받침대",
-            "압착시멘트(백시멘트)",
-            "떠발이 몰탈",
-            "심패드",
-            "성형슬리브(오수)Φ125",
-            "성형슬리브(세면,바닥,샤워)Φ175",
-            "슬리브용 몰탈막음 스펀지",
-            "세면,바닥,샤워 배수세트(Φ175)",
-        ],
-        "3. 오수/배수 배관류": [
-            "엘보(Φ100)",
-            "엘보(Φ50)",
-            "직관(Φ100)",
-            "직관(Φ50)",
-            "오수구덮개",
-            "PVC접착제",
-            "배수트랩(습식용)",
-            "배수트랩(상하용)",
-            "드레인커버(세면부)",
-            "드레인커버(샤워부)",
-        ],
-        "4. 벽판": [
-            "PU벽판",
-            "백시멘트(벽체용)",
-            "PB 독립배관",
-            "PB 세대 세트 배관",
-            "PB+이중관(오픈수전함)",
-        ],
-        "5. 타일": [
-            "벽타일(250×400)",
-            "벽타일(300×600)",
-            "바닥타일(200×200)",
-            "바닥타일(300×300)",
-        ],
-        "6. 천장판": [
-            "GRP천장판",
-            "ABS천장판",
-        ],
-        "7. 문세트": [
-            "PVC 4방문틀",
-            "PVC 4방틀(130~230바)",
-            "ABS 문짝",
-            "도어하드웨어",
-            "도어락",
-            "경첩",
-            "도어스토퍼",
-        ],
-        "8. 포켓도어": [
-            "가틀",
-            "본틀",
-            "레일 및 뎀퍼",
-            "오목손잡이 및 문틀받침대",
-            "포켓도어 ABS 문짝",
-            "포켓도어 레일",
-            "포켓도어 댐퍼",
-            "포켓도어 손잡이",
-        ],
-        "9. 도기류": [
-            "양변기",
-            "양변기(투피스)",
-            "양변기(준피스)",
-            "긴다리 세면기(원홀)",
-            "세면샤워 겸용수전(원홀)",
-            "폼업",
-            "S트랩",
-            "반다리 세면기(원홀)",
-            "세면기 수전(반다리)",
-            "세면샤워 겸용수전(반다리)",
-            "폼업(반다리)",
-            "P트랩",
-            "벽배수 배관",
-            "세면기 고정 볼트세트",
-        ],
-        "10. 수전": [
-            "세면기 수전",
-            "샤워수전",
-            "슬라이드바",
-            "레인 샤워수전",
-            "선반형 레인 샤워수전",
-            "청소건",
-            "세탁기 수전",
-        ],
-        "11. 욕실장": [
-            "PS장(600×900)",
-            "슬라이딩 욕실장",
-        ],
-        "12. 은경": [
-            "은경(거울)",
-        ],
-        "13. 액세서리": [
-            "수건걸이",
-            "휴지걸이",
-            "일자유리선반",
-            "코너선반",
-            "매립형 휴지걸이",
-            "청소솔",
-            "2단 수건선반",
-            "매립형 휴지걸이(비상폰)",
-            "L형 손잡이",
-            "ㅡ형 손잡이",
-            "접의식 의자",
-        ],
-        "14. 칸막이": [
-            "샤워부스 재료분리대(인조대리석)",
-            "샤워파티션 재료분리대(인조대리석)",
-        ],
-        "15. 욕실등": [
-            "욕실등",
-            "원형등",
-            "사각등",
-            "원형 매립등",
-            "천장 매립등(사각)",
-            "천장 매립등(원형)",
-            "벽부등",
-        ],
-        "16. 욕조": [
-            "SQ욕조",
-            "세라믹 욕조",
-        ],
-        "17. 환기류": [
-            "환풍기",
-            "후렉시블 호스",
-            "서스밴드",
-        ],
-        "18. 공통자재": [
-            "실리콘(내항균성)",
-            "실리콘(외장용)",
-            "우레탄폼",
-            "이면지지클립",
-            "타일 평탄클립",
-            "에폭시 접착제",
-            "코너마감재",
-            "코너비드",
-            "백시멘트(공통)",
-            "욕실등 내함",
-            "콘센트 내함",
-            "휴지걸이 내함",
-            "도어실(문지방)",
-            "젠다이상판",
-            "젠다이 브라켓",
-            "PVC보온재",
-            "바닥타일 보양",
-            "바닥타일 보양테이프",
-            "슬리브 방수액",
-            "재료분리대(SUS)",
-            "재료분리대(인조대리석)",
-        ],
-        "19. 가공 품목 (천장판 타공)": [
-            "환풍기홀",
-            "사각매립등",
-            "원형등 타공",
-            "직선 1회",
-        ],
-    }
+            /* 규격 수량 입력 칸의 레이블을 회색으로 (columns 내부의 number_input만) */
+            div[data-testid="stExpander"] div[data-testid="column"] div[data-testid="stNumberInput"] label {
+                color: #808080 !important;
+                font-size: 0.9rem !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
-    edited_items = st.session_state.get(AUTO_ITEMS_KEY, current_auto_items).copy()
+        if st.button("기본값으로 초기화", key="reset_new_auto_items"):
+            st.session_state[AUTO_ITEMS_KEY] = current_auto_items.copy()
+            st.success("기본값으로 초기화되었습니다.")
+            st.rerun()
 
-    for cat_name, item_list in auto_categories.items():
-        st.markdown(f"**{cat_name}**")
-        cols = st.columns(3)
-        col_idx = 0
+        # 세션 스테이트에서 현재 선택값 가져오기
+        edited_items = st.session_state.get(AUTO_ITEMS_KEY, current_auto_items).copy()
 
-        for item_name in item_list:
-            if item_name in current_auto_items:
-                saved_qty = edited_items.get(item_name, current_auto_items[item_name])
-                default_qty = current_auto_items[item_name]
+        # 각 대분류별로 처리
+        for major_category, config in NEW_AUTO_ITEMS_STRUCTURE.items():
+            st.markdown(f"### {major_category}")
 
-                with cols[col_idx % 3]:
-                    help_text = (
-                        "현재 바닥판에서 미사용 (기본: 0)"
-                        if default_qty == 0
-                        else f"기본값: {default_qty}"
-                    )
-                    edited_qty = st.number_input(
-                        item_name,
-                        min_value=0.0,
-                        max_value=999.0,
-                        value=float(saved_qty),
-                        step=0.5,
-                        key=f"auto_{item_name}",
-                        help=help_text,
-                    )
-                    edited_items[item_name] = edited_qty
-                col_idx += 1
+            if config["subcategories"] is None:
+                # 케이스 1: 중분류/규격 없음 (예: GRP바닥판, FRP바닥판)
+                if major_category not in edited_items:
+                    edited_items[major_category] = {}
 
-    st.session_state[AUTO_ITEMS_KEY] = edited_items
+                current_qty = edited_items.get(major_category, {}).get("_self", 0)
+                default_qty = current_auto_items.get(major_category, {}).get("_self", 0)
+
+                new_qty = st.number_input(
+                    f"{major_category} 수량",
+                    min_value=0.0,
+                    max_value=999.0,
+                    value=float(current_qty),
+                    step=0.5,
+                    key=f"qty_{major_category}",
+                    help=f"기본값: {default_qty}",
+                )
+                edited_items[major_category]["_self"] = new_qty
+
+            else:
+                # 케이스 2: 중분류 있음
+                for subcategory, specs in config["subcategories"].items():
+                    if not specs:
+                        # 케이스 2-1: 규격 없음 (예: PB독립배관, 도어락)
+                        if major_category not in edited_items:
+                            edited_items[major_category] = {}
+                        if subcategory not in edited_items[major_category]:
+                            edited_items[major_category][subcategory] = {"_self": 0}
+
+                        current_qty = edited_items[major_category][subcategory].get("_self", 0)
+                        default_qty = current_auto_items.get(major_category, {}).get(subcategory, {}).get("_self", 0)
+
+                        # 중분류명을 굵게 표시
+                        st.markdown(f"**{subcategory}**", unsafe_allow_html=True)
+
+                        new_qty = st.number_input(
+                            f"수량",
+                            min_value=0.0,
+                            max_value=999.0,
+                            value=float(current_qty),
+                            step=0.5,
+                            key=f"qty_{major_category}_{subcategory}",
+                            help=f"기본값: {default_qty}",
+                            label_visibility="collapsed",  # 레이블 숨김
+                        )
+                        edited_items[major_category][subcategory]["_self"] = new_qty
+
+                    else:
+                        # 케이스 2-2: 규격 있음 → multiselect + 각 규격별 수량
+                        # 현재 선택된 규격 찾기 (수량 > 0인 항목)
+                        if major_category not in edited_items:
+                            edited_items[major_category] = {}
+                        if subcategory not in edited_items[major_category]:
+                            edited_items[major_category][subcategory] = {}
+
+                        default_selected = [
+                            s for s in specs
+                            if edited_items.get(major_category, {}).get(subcategory, {}).get(s, 0) > 0
+                        ]
+
+                        # 기본값이 없으면 첫 번째 항목을 선택
+                        if not default_selected and specs:
+                            default_selected = [specs[0]]
+
+                        # 레이블을 별도로 표시: 중분류명(검은색) + "선택"(회색)
+                        st.markdown(
+                            f"**{subcategory}** <span style='color: #808080; font-size: 0.875rem;'>선택</span>",
+                            unsafe_allow_html=True
+                        )
+
+                        selected_specs = st.multiselect(
+                            f"{subcategory} 선택",
+                            options=specs,
+                            default=default_selected,
+                            key=f"multi_{major_category}_{subcategory}",
+                            label_visibility="collapsed",  # 레이블 숨김
+                        )
+
+                        if selected_specs:
+                            # 선택된 규격들에 대해 수량 입력
+                            cols = st.columns(min(len(selected_specs), 3))
+                            for idx, spec in enumerate(selected_specs):
+                                with cols[idx % len(cols)]:
+                                    current_qty = edited_items[major_category][subcategory].get(spec, 1)
+                                    default_qty = current_auto_items.get(major_category, {}).get(subcategory, {}).get(spec, 0)
+
+                                    new_qty = st.number_input(
+                                        f"{spec}",
+                                        min_value=0.0,
+                                        max_value=999.0,
+                                        value=float(current_qty) if current_qty > 0 else 1.0,
+                                        step=0.5,
+                                        key=f"qty_{major_category}_{subcategory}_{spec}",
+                                        help=f"기본값: {default_qty}",
+                                    )
+                                    edited_items[major_category][subcategory][spec] = new_qty
+
+                        # 선택 해제된 규격은 0으로 설정
+                        for spec in specs:
+                            if spec not in selected_specs:
+                                edited_items[major_category][subcategory][spec] = 0
+
+        # 천장판 타공 항목 (별도 유지)
+        st.divider()
+        st.markdown("### 가공 품목 (천장판 타공)")
+
+        if "_drilling" not in edited_items:
+            edited_items["_drilling"] = {}
+
+        cols = st.columns(4)
+        for idx, (item_name, default_qty) in enumerate(CEILING_DRILLING_ITEMS.items()):
+            with cols[idx % 4]:
+                current_qty = edited_items["_drilling"].get(item_name, default_qty)
+                new_qty = st.number_input(
+                    item_name,
+                    min_value=0.0,
+                    max_value=999.0,
+                    value=float(current_qty),
+                    step=1.0,
+                    key=f"drilling_{item_name}",
+                    help=f"기본값: {default_qty}",
+                )
+                edited_items["_drilling"][item_name] = new_qty
+
+        # 세션 스테이트 업데이트
+        st.session_state[AUTO_ITEMS_KEY] = edited_items
 
     # ═══════════════════════════════════════════════════════════════
     # '견적에 포함' 문장에서 품목 추가
@@ -1448,27 +1204,38 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
 
     # 새 품목 추가 폼
     with st.form("add_custom_item_form", clear_on_submit=True):
-        col_cat, col_name, col_qty = st.columns([1, 2, 1])
-        with col_cat:
-            new_category = st.text_input("대분류", placeholder="예: 액세서리")
-        with col_name:
-            new_item_name = st.text_input("품목명", placeholder="예: 비누받침대")
-        with col_qty:
+        col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+        with col1:
+            new_major = st.text_input("대분류", placeholder="예: 액세서리")
+        with col2:
+            new_sub = st.text_input("중분류", placeholder="예: 수건걸이")
+        with col3:
+            new_spec = st.text_input("사양 및 규격", placeholder="예: EL-400-1")
+        with col4:
             new_qty = st.number_input(
                 "수량", min_value=0.0, max_value=100.0, value=1.0, step=0.5
             )
 
         add_btn = st.form_submit_button("품목 추가", use_container_width=True)
-        if add_btn and new_item_name.strip():
-            st.session_state[CUSTOM_ITEMS_KEY].append(
-                {
-                    "category": new_category.strip() or "기타",
-                    "name": new_item_name.strip(),
-                    "qty": new_qty,
-                }
-            )
-            st.success(f"'{new_item_name}' 품목이 추가되었습니다.")
-            st.rerun()
+        if add_btn:
+            if not new_major.strip():
+                st.warning("대분류를 입력하세요.")
+            else:
+                st.session_state[CUSTOM_ITEMS_KEY].append(
+                    {
+                        "major": new_major.strip(),
+                        "sub": new_sub.strip(),
+                        "spec": new_spec.strip(),
+                        "qty": new_qty,
+                    }
+                )
+                display_name = f"{new_major}"
+                if new_sub.strip():
+                    display_name += f" > {new_sub}"
+                if new_spec.strip():
+                    display_name += f" ({new_spec})"
+                st.success(f"'{display_name}' 품목이 추가되었습니다.")
+                st.rerun()
 
     # 추가된 사용자 정의 품목 목록 표시 및 삭제
     custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
@@ -1478,7 +1245,20 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
         for idx, item in enumerate(custom_items):
             col_info, col_del = st.columns([4, 1])
             with col_info:
-                st.text(f"[{item['category']}] {item['name']} - 수량: {item['qty']}")
+                # 대분류, 중분류, 규격 표시
+                major = item.get('major', item.get('category', ''))
+                sub = item.get('sub', '')
+                spec = item.get('spec', '')
+                qty = item.get('qty', item.get('name', ''))
+
+                display_text = f"{major}"
+                if sub:
+                    display_text += f" > {sub}"
+                if spec:
+                    display_text += f" ({spec})"
+                display_text += f" - 수량: {qty}"
+
+                st.text(display_text)
             with col_del:
                 if st.button("삭제", key=f"del_custom_{idx}"):
                     items_to_remove.append(idx)
@@ -1491,8 +1271,6 @@ with st.expander("자동지정 품목 수량 편집", expanded=False):
 
 # 최종 자동지정 품목
 final_auto_items = st.session_state.get(AUTO_ITEMS_KEY, current_auto_items)
-final_select_items = st.session_state.get(SELECT_ITEMS_KEY, {})
-final_optional_items = st.session_state.get(OPTIONAL_ITEMS_KEY, {})
 final_custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
 
 # ----------------------------
@@ -1500,7 +1278,6 @@ final_custom_items = st.session_state.get(CUSTOM_ITEMS_KEY, [])
 # ----------------------------
 rows: List[Dict[str, Any]] = []
 warnings: List[str] = []
-spec_choices: Dict[str, List[pd.Series]] = {}  # 규격 선택지 (B열 일치, C열 다를 경우)
 
 if price_df is None:
     st.warning("단가표(엑셀)를 먼저 업로드하세요.")
@@ -1540,7 +1317,7 @@ else:
                 "ㅡ형 손잡이",
                 "접의식 의자",
             ]:
-                rec, _ = find_item(price_df, "액세서리", spec, 분류="주거약자")
+                rec = find_item(price_df, "액세서리", f"주거약자 {spec}")
                 if rec is not None:
                     add_row(
                         rows,
@@ -1593,288 +1370,144 @@ else:
         # 단가와 금액 모두 총 금액으로 표시 (수량 1)
         add_row(rows, "천장판", "GRP천장판", 1, total_price)
 
-    # 4) 필수 선택 품목 반영 (SELECT_ITEMS_WITH_DEFAULT)
-    for name, spec in final_select_items.items():
-        if spec == "선택안함":
-            continue
-
-        item_info = SELECT_ITEMS_WITH_DEFAULT.get(name, {})
-        category = item_info.get("category", name)
-
-        rec, choices = find_item(price_df, category, spec)
-        if rec is not None:
-            add_row(rows, category, spec, rec.get("수량", 1) or 1, rec.get("단가", 0))
-            if choices:
-                spec_choices[f"{category}::{spec}"] = choices
-        else:
-            add_row(rows, category, spec, 1, 0)
-            warnings.append(f"[필수선택] '{name} - {spec}' 단가 미발견 → 0 처리")
-
-    # 5) 옵션 품목 반영 (OPTIONAL_ITEMS)
-    for name, spec in final_optional_items.items():
-        if spec == "선택안함":
-            continue
-
-        item_info = OPTIONAL_ITEMS.get(name, {})
-        category = item_info.get("category", name)
-
-        rec, choices = find_item(price_df, category, spec)
-        if rec is not None:
-            add_row(rows, category, spec, rec.get("수량", 1) or 1, rec.get("단가", 0))
-            if choices:
-                spec_choices[f"{category}::{spec}"] = choices
-        else:
-            add_row(rows, category, spec, 1, 0)
-            warnings.append(f"[옵션] '{name} - {spec}' 단가 미발견 → 0 처리")
-
-    # 6) 자동지정 품목 추가
-    # 품목명을 단가표에서 찾기 위한 매핑
-    # 품목명 → A열(품목) 카테고리 매핑
-    # C열(사양 및 규격)은 품목명과 정확히 일치해야 함
-    AUTO_ITEM_CATEGORY_MAP = {
-        # 오수/배수 배관류
-        "엘보(Φ100)": "오,배수배관류",
-        "엘보(Φ50)": "오,배수배관류",
-        "직관(Φ100)": "오,배수배관류",
-        "직관(Φ50)": "오,배수배관류",
-        "오수구덮개": "오,배수배관류",
-        "PVC접착제": "오,배수배관류",
-        "배수트랩(습식용)": "오,배수배관류",
-        "배수트랩(상하용)": "오,배수배관류",
-        "드레인커버(세면부)": "오,배수배관류",
-        "드레인커버(샤워부)": "오,배수배관류",
-        "양변기(오수구) 소켓(Φ100)": "오,배수배관류",
-        "바닥 배수소켓(Φ50)": "오,배수배관류",
-        "욕조(세면기)배수 소켓": "오,배수배관류",
-        "난방배관 소켓(Φ16)": "오,배수배관류",
-        "클럽메쉬 세트(클립포함)": "오,배수배관류",
-        "배수구 편심소켓(Φ50)": "오,배수배관류",
-        "벽체코너 받침대": "오,배수배관류",
-        "볼트": "오,배수배관류",
-        "성형슬리브(오수)Φ125": "오,배수배관류",
-        "성형슬리브(세면,바닥,샤워)Φ175": "오,배수배관류",
-        "슬리브용 몰탈막음 스펀지": "오,배수배관류",
-        "세면,바닥,샤워 배수세트(Φ175)": "오,배수배관류",
-
-        # 바닥판
-        "배수트랩(층하용)": "바닥판",
-        "배수트랩 1구 가지관(층상용)": "바닥판",
-        "배수트랩 2구 가지관(층상용)": "바닥판",
-        "배수트랩 3구 가지관(층상용)": "바닥판",
-        "드레인커버(세면부용)": "바닥판",
-        "드레인커버(샤워실용)": "바닥판",
-        "모래": "바닥판",
-        "시멘트": "바닥판",
-        "백시멘트(바닥용)": "바닥판",
-        "배수트랩 습식용(층하용)": "바닥판",
-        "배수트랩 습식용 1구 가지관(층상용)": "바닥판",
-        "배수트랩 습식용 2구 가지관(층상용)": "바닥판",
-        "배수트랩 습식용 3구 가지관(층상용)": "바닥판",
-        "방통몰탈(레미콘)": "바닥판",
-        "PVE바닥판 소켓 받침대": "바닥판",
-        "압착시멘트(백시멘트)": "바닥판",
-        "떠발이 몰탈": "바닥판",
-        "심패드": "바닥판",
-
-        # 벽판
-        "PU벽판": "벽판",
-        "백시멘트(벽체용)": "벽판",
-
-        # 냉온수배관
-        "PB 독립배관": "냉온수배관",
-        "PB 세대 세트 배관": "냉온수배관",
-        "PB+이중관(오픈수전함)": "냉온수배관",
-
-        # 천장판
-        "GRP천장판": "천장판",
-        "ABS천장판": "천장판",
-
-        # 문세트
-        "PVC 4방문틀": "문세트",
-        "PVC 4방틀(130~230바)": "문세트",
-        "ABS 문짝": "문세트",
-        "도어하드웨어": "문세트",
-        "도어락": "문세트",
-        "경첩": "문세트",
-        "도어스토퍼": "문세트",
-
-        # 포켓도어
-        "가틀": "포켓도어",
-        "본틀": "포켓도어",
-        "레일 및 뎀퍼": "포켓도어",
-        "오목손잡이 및 문틀받침대": "포켓도어",
-        "포켓도어 ABS 문짝": "포켓도어",
-        "포켓도어 레일": "포켓도어",
-        "포켓도어 댐퍼": "포켓도어",
-        "포켓도어 손잡이": "포켓도어",
-
-        # 도기류
-        "양변기": "도기류",
-        "양변기(투피스)": "도기류",
-        "양변기(준피스)": "도기류",
-        "긴다리 세면기(원홀)": "도기류",
-        "세면샤워 겸용수전(원홀)": "도기류",
-        "폼업": "도기류",
-        "S트랩": "도기류",
-        "반다리 세면기(원홀)": "도기류",
-        "폼업(반다리)": "도기류",
-        "P트랩": "도기류",
-        "벽배수 배관": "도기류",
-        "세면기 고정 볼트세트": "도기류",
-
-        # 수전
-        "세면기 수전": "수전",
-        "세면기 수전(반다리)": "수전",
-        "세면샤워 겸용수전(반다리)": "수전",
-        "샤워수전": "수전",
-        "슬라이드바": "수전",
-        "레인 샤워수전": "수전",
-        "선반형 레인 샤워수전": "수전",
-        "청소건": "수전",
-        "세탁기 수전": "수전",
-
-        # 욕실장
-        "PS장(600×900)": "욕실장",
-        "슬라이딩 욕실장": "욕실장",
-
-        # 은경
-        "은경(거울)": "은경",
-
-        # 액세서리
-        "수건걸이": "액세서리",
-        "휴지걸이": "액세서리",
-        "일자유리선반": "액세서리",
-        "코너선반": "액세서리",
-        "매립형 휴지걸이": "액세서리",
-        "청소솔": "액세서리",
-        "2단 수건선반": "액세서리",
-        "매립형 휴지걸이(비상폰)": "액세서리",
-        "L형 손잡이": "액세서리",
-        "ㅡ형 손잡이": "액세서리",
-        "접의식 의자": "액세서리",
-
-        # 칸막이
-        "샤워부스 재료분리대(인조대리석)": "칸막이",
-        "샤워파티션 재료분리대(인조대리석)": "칸막이",
-
-        # 욕실등
-        "욕실등": "욕실등",
-        "원형등": "욕실등",
-        "사각등": "욕실등",
-        "원형 매립등": "욕실등",
-        "천장 매립등(사각)": "욕실등",
-        "천장 매립등(원형)": "욕실등",
-        "벽부등": "욕실등",
-
-        # 욕조
-        "SQ욕조": "욕조",
-        "세라믹 욕조": "욕조",
-
-        # 환기류
-        "환풍기": "환기류",
-        "후렉시블 호스": "환기류",
-        "서스밴드": "환기류",
-
-        # 공통자재
-        "실리콘(내항균성)": "공통자재",
-        "실리콘(외장용)": "공통자재",
-        "우레탄폼": "공통자재",
-        "이면지지클립": "공통자재",
-        "타일 평탄클립": "공통자재",
-        "에폭시 접착제": "공통자재",
-        "코너마감재": "공통자재",
-        "코너비드": "공통자재",
-        "백시멘트(공통)": "공통자재",
-        "욕실등 내함": "공통자재",
-        "콘센트 내함": "공통자재",
-        "휴지걸이 내함": "공통자재",
-        "도어실(문지방)": "공통자재",
-        "젠다이상판": "공통자재",
-        "젠다이 브라켓": "공통자재",
-        "PVC보온재": "공통자재",
-        "바닥타일 보양": "공통자재",
-        "바닥타일 보양테이프": "공통자재",
-        "슬리브 방수액": "공통자재",
-        "재료분리대(SUS)": "공통자재",
-        "재료분리대(인조대리석)": "공통자재",
-
-        # 타일
-        "벽타일(250×400)": "타일",
-        "벽타일(300×600)": "타일",
-        "바닥타일(200×200)": "타일",
-        "바닥타일(300×300)": "타일",
-
-        # 가공 품목 (천장판 타공)
-        "환풍기홀": "가공",
-        "사각매립등": "가공",
-        "원형등 타공": "가공",
-        "직선 1회": "가공",
-    }
-
+    # 4) 자동지정 품목 추가
     # 이미 추가된 품목 추적 (중복 방지)
     added_specs = set()
     for r in rows:
         spec_key = f"{r['품목']}::{r['사양 및 규격']}"
         added_specs.add(spec_key)
 
-    # 자동지정 품목 추가
-    for item_name, qty in final_auto_items.items():
-        if qty <= 0:
-            continue  # 수량이 0이면 스킵
-        if item_name == "환풍기홀":
-            continue  # 환풍기홀은 천장판 타공비에 이미 포함됨
-
-        # 카테고리 매핑 조회
-        품목_cat = AUTO_ITEM_CATEGORY_MAP.get(item_name)
-        if 품목_cat is None:
+    # 자동지정 품목 추가 (새로운 계층 구조)
+    for major_cat, subcats in final_auto_items.items():
+        if major_cat == "_drilling":
+            # 천장판 타공 항목 (별도 처리)
             continue
 
-        # 중복 체크
-        spec_key = f"{품목_cat}::{item_name}"
-        if spec_key in added_specs:
-            continue  # 이미 추가됨
+        config = NEW_AUTO_ITEMS_STRUCTURE.get(major_cat)
+        if not config:
+            continue
 
-        # 단가표에서 찾기: A열(품목)과 C열(사양 및 규격) 또는 B열(분류) 일치
-        rec, choices = find_item(price_df, 품목_cat, item_name)
+        if config["subcategories"] is None:
+            # 케이스 1: 중분류 없음 (예: GRP바닥판, FRP바닥판)
+            qty = subcats.get("_self", 0)
+            if qty > 0:
+                # 단가표에서 찾기
+                category_name = config["category_map"]
+                spec_key = f"{category_name}::{major_cat}"
 
-        # 단가 설정
-        if rec is not None:
-            unit_price = rec.get("단가", 0) or 0
-            if choices:
-                spec_choices[spec_key] = choices
+                if spec_key not in added_specs:
+                    rec = find_item(price_df, category_name, "")
+                    if rec is not None:
+                        unit_price = rec.get("단가", 0) or 0
+                    else:
+                        unit_price = 0
+                        warnings.append(f"[자동] '{major_cat}' 단가 미발견 → 0 처리")
+
+                    add_row(rows, category_name, "", qty, unit_price)
+                    added_specs.add(spec_key)
+
         else:
-            unit_price = 0
-            warnings.append(f"[자동지정] '{item_name}' 단가 미발견 → 0 처리")
+            # 케이스 2: 중분류 있음
+            for subcat, spec_dict in subcats.items():
+                if not spec_dict:
+                    continue
 
-        # rows에 추가
-        add_row(rows, 품목_cat, item_name, qty, unit_price)
-        added_specs.add(spec_key)
+                if "_self" in spec_dict:
+                    # 케이스 2-1: 규격 없음
+                    qty = spec_dict.get("_self", 0)
+                    if qty > 0:
+                        category_name = config["category_map"]
+                        spec_key = f"{category_name}::{subcat}"
+
+                        if spec_key not in added_specs:
+                            rec = find_item(price_df, category_name, subcat)
+                            if rec is not None:
+                                unit_price = rec.get("단가", 0) or 0
+                            else:
+                                unit_price = 0
+                                warnings.append(f"[자동] '{major_cat} > {subcat}' 단가 미발견 → 0 처리")
+
+                            add_row(rows, category_name, subcat, qty, unit_price)
+                            added_specs.add(spec_key)
+
+                else:
+                    # 케이스 2-2: 규격 있음
+                    for spec, qty in spec_dict.items():
+                        if qty > 0:
+                            category_name = config["category_map"]
+                            # 중분류 + 규격을 합쳐서 사양 및 규격으로 사용
+                            spec_text = f"{subcat} {spec}".strip()
+                            spec_key = f"{category_name}::{spec_text}"
+
+                            if spec_key not in added_specs:
+                                rec = find_item(price_df, category_name, spec_text)
+                                if rec is not None:
+                                    unit_price = rec.get("단가", 0) or 0
+                                else:
+                                    unit_price = 0
+                                    warnings.append(f"[자동] '{major_cat} > {subcat} > {spec}' 단가 미발견 → 0 처리")
+
+                                add_row(rows, category_name, spec_text, qty, unit_price)
+                                added_specs.add(spec_key)
+
+    # 천장판 타공 항목 추가
+    drilling_items = final_auto_items.get("_drilling", {})
+    for item_name, qty in drilling_items.items():
+        if qty > 0 and item_name != "환풍기홀":  # 환풍기홀은 천장판 소계에 이미 포함됨
+            category_name = "가공"
+            spec_key = f"{category_name}::{item_name}"
+
+            if spec_key not in added_specs:
+                rec = find_item(price_df, category_name, item_name)
+                if rec is not None:
+                    unit_price = rec.get("단가", 0) or 0
+                else:
+                    unit_price = 0
+                    warnings.append(f"[가공] '{item_name}' 단가 미발견 → 0 처리")
+
+                add_row(rows, category_name, item_name, qty, unit_price)
+                added_specs.add(spec_key)
 
     # 7) 사용자 정의 품목 추가
     for custom_item in final_custom_items:
-        cat = custom_item.get("category", "기타")
-        name = custom_item.get("name", "")
+        # 새로운 구조 (major, sub, spec) 또는 기존 구조 (category, name) 지원
+        major = custom_item.get("major", custom_item.get("category", "기타"))
+        sub = custom_item.get("sub", "")
+        spec = custom_item.get("spec", "")
         qty = custom_item.get("qty", 0)
 
-        if qty <= 0 or not name:
+        # 기존 구조 호환성
+        if not major and "name" in custom_item:
+            major = custom_item.get("category", "기타")
+            spec = custom_item.get("name", "")
+
+        if qty <= 0 or not major:
             continue
 
-        # 중복 체크
-        spec_key = f"{cat}::{name}"
+        # 중복 체크를 위한 표시 텍스트
+        if sub and spec:
+            display_text = f"{sub} {spec}"
+        elif sub:
+            display_text = sub
+        elif spec:
+            display_text = spec
+        else:
+            display_text = major
+
+        spec_key = f"{major}::{display_text}"
         if spec_key in added_specs:
             continue
 
-        # 단가표에서 찾기
-        rec, choices = find_item(price_df, cat, name)
+        # 단가표에서 찾기 (대분류 + 합쳐진 사양)
+        # display_text는 이미 "중분류 사양" 형식으로 합쳐져 있음
+        rec = find_item(price_df, major, display_text)
         if rec is not None:
             unit_price = rec.get("단가", 0) or 0
-            if choices:
-                spec_choices[spec_key] = choices
         else:
             unit_price = 0
-            warnings.append(f"[사용자정의] '{name}' 단가 미발견 → 0 처리")
+            warnings.append(f"[사용자정의] '{major} > {display_text}' 단가 미발견 → 0 처리")
 
-        add_row(rows, cat, name, qty, unit_price)
+        add_row(rows, major, display_text, qty, unit_price)
         added_specs.add(spec_key)
 
 # ----------------------------
@@ -1892,45 +1525,45 @@ if rows:
     )
     est_df["금액"] = (est_df["수량"] * est_df["단가"]).round(0)
 
+    # 디버그: 단가표 전체 구조 확인
+    with st.expander("🔍 단가표 디버그 정보", expanded=False):
+        st.markdown("### 📋 자재단가내역 시트")
+        st.write(f"**총 행 수:** {len(price_df)}")
+        st.write(f"**컬럼:** {list(price_df.columns)}")
+
+        # 품목 컬럼의 고유값 표시
+        if "품목" in price_df.columns:
+            unique_items = price_df["품목"].dropna().unique()
+            st.write(f"**품목(대분류) 고유값 (총 {len(unique_items)}개):**")
+            st.code(", ".join([f'"{x}"' for x in unique_items]))
+
+        st.write("**전체 샘플 (처음 30행):**")
+        st.dataframe(price_df[["품목", "분류", "사양 및 규격", "단가"]].head(30))
+
+        st.divider()
+
+        # 자동지정항목 시트도 읽어서 비교
+        st.markdown("### 📋 자동지정항목 시트 (비교용)")
+        try:
+            if pricebook_file is not None:
+                pricebook_file.seek(0)
+                auto_items_df = pd.read_excel(io.BytesIO(pricebook_file.read()), sheet_name="자동지정항목")
+
+                st.write(f"**총 행 수:** {len(auto_items_df)}")
+                st.write(f"**컬럼:** {list(auto_items_df.columns)}")
+
+                # 첫 번째 컬럼(A열)의 고유값 표시
+                first_col = auto_items_df.columns[0]
+                auto_unique = auto_items_df[first_col].dropna().unique()
+                st.write(f"**{first_col} 컬럼 고유값 (총 {len(auto_unique)}개):**")
+                st.code(", ".join([f'"{x}"' for x in auto_unique]))
+
+                st.write("**전체 샘플 (처음 30행):**")
+                st.dataframe(auto_items_df.head(30))
+        except Exception as e:
+            st.warning(f"자동지정항목 시트를 읽을 수 없습니다: {e}")
+
     st.subheader("견적서 미리보기")
-
-    # 규격 선택이 필요한 품목 표시 (B열 일치, C열 다수인 경우)
-    if spec_choices:
-        st.markdown("#### ⚠️ 규격 선택 필요")
-        st.info("아래 품목들은 여러 규격이 있습니다. 원하는 규격을 선택해주세요.")
-
-        for spec_key, choices in spec_choices.items():
-            품목_cat, item_name = spec_key.split("::", 1)
-
-            # 선택 옵션 생성
-            options = []
-            for choice in choices:
-                spec_val = str(choice.get("사양 및 규격", "")).strip()
-                price_val = choice.get("단가", 0) or 0
-                options.append(f"{spec_val} (단가: {price_val:,.0f}원)")
-
-            # selectbox로 선택
-            selected_idx = st.selectbox(
-                f"**{품목_cat}** - {item_name}",
-                range(len(options)),
-                format_func=lambda x, opts=options: opts[x],
-                key=f"spec_select_{spec_key}",
-            )
-
-            # 선택된 규격으로 est_df 업데이트
-            if selected_idx is not None:
-                selected_choice = choices[selected_idx]
-                new_spec = str(selected_choice.get("사양 및 규격", "")).strip()
-                new_price = selected_choice.get("단가", 0) or 0
-
-                # DataFrame에서 해당 행 찾아서 업데이트
-                mask = (est_df["품목"] == 품목_cat) & (est_df["사양 및 규격"] == item_name)
-                if mask.any():
-                    est_df.loc[mask, "사양 및 규격"] = new_spec
-                    est_df.loc[mask, "단가"] = new_price
-                    est_df.loc[mask, "금액"] = est_df.loc[mask, "수량"] * new_price
-
-        st.markdown("---")
 
     st.dataframe(est_df, use_container_width=True)
 

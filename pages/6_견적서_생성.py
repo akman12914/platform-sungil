@@ -938,17 +938,19 @@ with col_floor_type:
     # 바닥판 재질에서 종류 추출 (바닥판 페이지에서 결정된 값 사용)
     floor_material = floor_data.get("재질", "").upper() if floor_data else ""
 
-    # PP/PE, PVE는 PP로, GRP/SMC/FRP는 GRP로 매핑
+    # 바닥판 재질을 종류로 매핑
     if "PP" in floor_material or "PE" in floor_material or "PVE" in floor_material:
         floor_type = "PP"
+    elif "FRP" in floor_material or "SMC" in floor_material:
+        floor_type = "FRP"
     else:
         floor_type = "GRP"
 
     # 바닥판에서 넘어온 값 표시 (수정 불가)
     st.radio(
         "바닥판 종류",
-        options=["PP", "GRP"],
-        index=0 if floor_type == "PP" else 1,
+        options=["PP", "GRP", "FRP"],
+        index=["PP", "GRP", "FRP"].index(floor_type),
         horizontal=True,
         help="바닥판 페이지에서 지정된 값 (수정 불가)",
         key="floor_type_radio",

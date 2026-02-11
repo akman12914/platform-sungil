@@ -1531,254 +1531,194 @@ floor_result = st.session_state.get(FLOOR_RESULT_KEY)
 wall_result = st.session_state.get(WALL_RESULT_KEY)
 ceil_result = st.session_state.get(CEIL_RESULT_KEY)
 
-# L/R 방향 선택 (판넬류, 배관류, 욕실장 등)
-st.markdown("---")
-st.subheader("품목별 방향(L/R) 설정")
-st.markdown("""
-아래 품목들은 **좌/우 구분**이 필요합니다. 각 품목의 방향을 선택해주세요.
-- **L (좌)**: 왼쪽 방향
-- **R (우)**: 오른쪽 방향
-""")
+# ============================================
+# 품목별 방향(L/R) 설정 - 감지된 품목만 표시
+# ============================================
 
-# 바닥판 계산 결과에서 방향 정보 확인
-floor_direction_from_calc = None
+# 계산 결과에서 방향 정보 확인
+_calc_directions = {}  # 품목명 -> direction value from calc
 if floor_result:
-    floor_inputs = floor_result.get("inputs", {})
-    floor_direction_from_calc = floor_inputs.get("direction", "")
-
-# 벽판 계산 결과에서 방향 정보 확인
-wall_direction_from_calc = None
+    _fd = floor_result.get("inputs", {}).get("direction", "")
+    if _fd in ["left", "right", "좌", "우"]:
+        _calc_directions["바닥판"] = _fd
 if wall_result:
-    wall_inputs = wall_result.get("inputs", {})
-    wall_direction_from_calc = wall_inputs.get("direction", "")
-
-# 천장판 계산 결과에서 방향 정보 확인
-ceil_direction_from_calc = None
+    _wd = wall_result.get("inputs", {}).get("direction", "")
+    if _wd in ["left", "right", "좌", "우"]:
+        _calc_directions["벽판"] = _wd
 if ceil_result:
-    ceil_inputs = ceil_result.get("inputs", {})
-    ceil_direction_from_calc = ceil_inputs.get("direction", "")
+    _cd = ceil_result.get("inputs", {}).get("direction", "")
+    if _cd in ["left", "right", "좌", "우"]:
+        _calc_directions["천장판"] = _cd
 
-# ============================================
-# 1. 판넬류 방향 설정
-# ============================================
-st.markdown("#### 1. 판넬류")
-panel_col1, panel_col2, panel_col3 = st.columns(3)
-
-with panel_col1:
-    st.markdown("**바닥판**")
-    if floor_direction_from_calc and floor_direction_from_calc in ["left", "right", "좌", "우"]:
-        dir_display = "좌 (L)" if floor_direction_from_calc in ["left", "좌"] else "우 (R)"
-        st.success(f"계산 결과에서 확인: **{dir_display}**")
-        st.session_state["floor_direction_override"] = "좌" if floor_direction_from_calc in ["left", "좌"] else "우"
-    else:
-        floor_direction_choice = st.radio(
-            "바닥판 방향",
-            options=["좌 (L)", "우 (R)"],
-            index=0,
-            horizontal=True,
-            key="floor_dir_radio",
-            help="욕조 배수구 위치 기준으로 좌/우를 선택합니다."
-        )
-        st.session_state["floor_direction_override"] = "좌" if "좌" in floor_direction_choice else "우"
-
-with panel_col2:
-    st.markdown("**벽판**")
-    if wall_direction_from_calc and wall_direction_from_calc in ["left", "right", "좌", "우"]:
-        dir_display = "좌 (L)" if wall_direction_from_calc in ["left", "좌"] else "우 (R)"
-        st.success(f"계산 결과에서 확인: **{dir_display}**")
-        st.session_state["wall_direction_override"] = "좌" if wall_direction_from_calc in ["left", "좌"] else "우"
-    else:
-        wall_direction_choice = st.radio(
-            "벽판 방향",
-            options=["좌 (L)", "우 (R)"],
-            index=0,
-            horizontal=True,
-            key="wall_dir_radio",
-            help="벽판의 좌/우 방향을 선택합니다."
-        )
-        st.session_state["wall_direction_override"] = "좌" if "좌" in wall_direction_choice else "우"
-
-with panel_col3:
-    st.markdown("**천장판**")
-    if ceil_direction_from_calc and ceil_direction_from_calc in ["left", "right", "좌", "우"]:
-        dir_display = "좌 (L)" if ceil_direction_from_calc in ["left", "좌"] else "우 (R)"
-        st.success(f"계산 결과에서 확인: **{dir_display}**")
-        st.session_state["ceil_direction_override"] = "좌" if ceil_direction_from_calc in ["left", "좌"] else "우"
-    else:
-        ceil_direction_choice = st.radio(
-            "천장판 방향",
-            options=["좌 (L)", "우 (R)"],
-            index=0,
-            horizontal=True,
-            key="ceil_dir_radio",
-            help="천장판의 좌/우 방향을 선택합니다."
-        )
-        st.session_state["ceil_direction_override"] = "좌" if "좌" in ceil_direction_choice else "우"
-
-# ============================================
-# 2. 냉온수 배관 방향 설정
-# ============================================
-st.markdown("#### 2. 냉온수 배관")
-pipe_col1, pipe_col2 = st.columns(2)
-
-with pipe_col1:
-    st.markdown("**독립배관**")
-    indep_pipe_direction = st.radio(
-        "독립배관 방향",
-        options=["좌 (L)", "우 (R)"],
-        index=0,
-        horizontal=True,
-        key="indep_pipe_dir_radio",
-        help="독립배관의 좌/우 방향을 선택합니다."
-    )
-    st.session_state["indep_pipe_direction"] = "좌" if "좌" in indep_pipe_direction else "우"
-
-with pipe_col2:
-    st.markdown("**PB세대 세트배관**")
-    pb_pipe_direction = st.radio(
-        "PB세대 세트배관 방향",
-        options=["좌 (L)", "우 (R)"],
-        index=0,
-        horizontal=True,
-        key="pb_pipe_dir_radio",
-        help="PB세대 세트배관의 좌/우 방향을 선택합니다."
-    )
-    st.session_state["pb_pipe_direction"] = "좌" if "좌" in pb_pipe_direction else "우"
-
-# ============================================
-# 3. 오픈수전함 방향 설정 (코너형/사각형 구분 후 좌/우)
-# ============================================
-st.markdown("#### 3. 오픈수전함")
-st.caption("오픈수전함은 코너형/사각형 구분 후 좌/우를 선택합니다.")
-faucet_col1, faucet_col2 = st.columns(2)
-
-with faucet_col1:
-    faucet_type = st.radio(
-        "오픈수전함 형태",
-        options=["코너형", "사각형"],
-        index=0,
-        horizontal=True,
-        key="faucet_type_radio",
-        help="오픈수전함의 형태를 선택합니다."
-    )
-    st.session_state["faucet_box_type"] = faucet_type
-
-with faucet_col2:
-    faucet_direction = st.radio(
-        "오픈수전함 방향",
-        options=["좌 (L)", "우 (R)"],
-        index=0,
-        horizontal=True,
-        key="faucet_dir_radio",
-        help="오픈수전함의 좌/우 방향을 선택합니다."
-    )
-    st.session_state["faucet_box_direction"] = "좌" if "좌" in faucet_direction else "우"
-
-# ============================================
-# 4. 욕실장 방향 설정
-# ============================================
-st.markdown("#### 4. 욕실 관련")
-bath_col1, bath_col2 = st.columns(2)
-
-with bath_col1:
-    st.markdown("**PS욕실장 / 슬라이딩 욕실장**")
-    bathroom_cabinet_direction = st.radio(
-        "욕실장 방향",
-        options=["좌 (L)", "우 (R)"],
-        index=0,
-        horizontal=True,
-        key="bathroom_cabinet_dir_radio",
-        help="PS욕실장 및 슬라이딩 욕실장의 좌/우 방향을 선택합니다."
-    )
-    st.session_state["bathroom_cabinet_direction"] = "좌" if "좌" in bathroom_cabinet_direction else "우"
-
-with bath_col2:
-    st.markdown(" ")  # 빈 공간
-
-# ============================================
-# L/R 품목 수량 별도 지정
-# ============================================
-st.markdown("#### 5. 품목별 좌/우 수량 별도 지정")
-st.caption("L/R 구분이 필요한 품목의 좌/우 수량을 별도로 지정할 수 있습니다. 지정하지 않으면 기본 수량이 사용됩니다.")
+# 품목명 -> session_state key 매핑
+_ITEM_TO_STATE_KEY = {
+    "바닥판": "floor_direction_override",
+    "벽판": "wall_direction_override",
+    "천장판": "ceil_direction_override",
+    "독립배관": "indep_pipe_direction",
+    "PB세대 세트배관": "pb_pipe_direction",
+    "세대배관": "pb_pipe_direction",
+    "오픈수전함": "faucet_box_direction",
+    "PS욕실장": "bathroom_cabinet_direction",
+    "슬라이딩 욕실장": "bathroom_cabinet_direction",
+    "욕실장": "bathroom_cabinet_direction",
+}
 
 # L/R 수량 지정을 위한 session state 초기화
 if "lr_quantity_override" not in st.session_state:
     st.session_state["lr_quantity_override"] = {}
 
-# L/R 품목 목록 표시
-lr_items_to_configure = []
-
-# 저장된 견적에서 L/R 구분 가능한 품목 찾기
+# 데이터 소스에서 L/R 구분 가능한 품목 감지
 saved_quotations = st.session_state.get(SAVED_QUOTATIONS_KEY, [])
-for q in saved_quotations:
-    for row in q.get("rows", []):
-        품목 = _clean_value(row.get("품목", "")).strip()
-        if 품목 in LR_REQUIRED_ITEMS:
-            사양 = _clean_value(row.get("사양 및 규격", "")).strip()
-            수량 = float(row.get("수량", 0) or 0)
-            lr_items_to_configure.append({
-                "품목": 품목,
-                "사양": 사양,
-                "수량": 수량
-            })
+_source_rows = []
+if data_source == "엑셀 파일 업로드 (원가내역서)":
+    _source_rows = uploaded_items
+else:
+    for q in saved_quotations:
+        for row in q.get("rows", []):
+            _source_rows.append(row)
 
-if lr_items_to_configure:
-    st.info(f"총 {len(lr_items_to_configure)}개의 L/R 구분 가능 품목이 발견되었습니다.")
+detected_lr_items = []  # [{품목, 사양, 수량, category, description, has_subtype}]
+_seen_items = set()
+for _row in _source_rows:
+    _품목 = _clean_value(_row.get("품목", "")).strip()
+    if _품목 in LR_REQUIRED_ITEMS and _품목 not in _seen_items:
+        _seen_items.add(_품목)
+        _사양 = _clean_value(_row.get("사양 및 규격", "")).strip()
+        _수량 = float(_row.get("수량", 0) or 0)
+        detected_lr_items.append({
+            "품목": _품목,
+            "사양": _사양,
+            "수량": _수량,
+            **LR_REQUIRED_ITEMS[_품목],
+        })
 
-    # 품목별로 좌/우 수량 입력
-    for idx, item in enumerate(lr_items_to_configure):
-        품목 = item["품목"]
-        사양 = item["사양"]
-        기본수량 = item["수량"]
+if detected_lr_items:
+    st.markdown("---")
+    st.subheader("감지된 품목의 좌우 설정")
+    st.caption("L/R 구분이 필요한 품목이 감지되었습니다. 각 품목의 방향을 선택해주세요.")
 
-        key_base = f"{품목}_{사양}"
+    for idx, lr_item in enumerate(detected_lr_items):
+        품목 = lr_item["품목"]
+        사양 = lr_item["사양"]
+        수량 = lr_item["수량"]
+        has_subtype = lr_item.get("has_subtype", False)
+        state_key = _ITEM_TO_STATE_KEY.get(품목)
+        calc_dir = _calc_directions.get(품목)
 
-        with st.expander(f"📦 {품목} - {사양} (기본 수량: {기본수량})"):
-            col1, col2, col3 = st.columns([2, 1, 1])
+        # 라벨 구성
+        label = f"**{품목}**"
+        if 사양:
+            label += f"  ({사양})"
 
-            with col1:
+        st.markdown(label)
+
+        # 오픈수전함: 형태 선택 + 방향 선택
+        if has_subtype:
+            cols = st.columns([1, 1, 2])
+            with cols[0]:
+                faucet_type = st.radio(
+                    "형태",
+                    options=["코너형", "사각형"],
+                    index=0,
+                    horizontal=True,
+                    key=f"faucet_type_radio_{idx}",
+                )
+                st.session_state["faucet_box_type"] = faucet_type
+            with cols[1]:
+                if calc_dir:
+                    dir_display = "좌 (L)" if calc_dir in ["left", "좌"] else "우 (R)"
+                    st.success(f"계산 결과: {dir_display}")
+                    st.session_state["faucet_box_direction"] = "좌" if calc_dir in ["left", "좌"] else "우"
+                else:
+                    direction_choice = st.radio(
+                        "방향",
+                        options=["좌 (L)", "우 (R)"],
+                        index=0,
+                        horizontal=True,
+                        key=f"lr_dir_radio_{idx}",
+                    )
+                    st.session_state["faucet_box_direction"] = "좌" if "좌" in direction_choice else "우"
+            with cols[2]:
+                # 수량 분리
+                key_base = f"{품목}_{사양}"
                 use_separate = st.checkbox(
                     "좌/우 수량 별도 지정",
                     key=f"use_separate_{idx}",
-                    value=key_base in st.session_state["lr_quantity_override"]
+                    value=key_base in st.session_state["lr_quantity_override"],
                 )
-
-            if use_separate:
-                with col2:
-                    left_qty = st.number_input(
-                        "좌 (L) 수량",
-                        min_value=0,
-                        value=int(기본수량 / 2) if key_base not in st.session_state["lr_quantity_override"] else st.session_state["lr_quantity_override"][key_base].get("L", int(기본수량 / 2)),
-                        step=1,
-                        key=f"left_qty_{idx}"
+                if use_separate:
+                    sq1, sq2 = st.columns(2)
+                    with sq1:
+                        left_qty = st.number_input(
+                            "좌 수량", min_value=0,
+                            value=st.session_state["lr_quantity_override"].get(key_base, {}).get("L", int(수량 / 2)),
+                            step=1, key=f"left_qty_{idx}",
+                        )
+                    with sq2:
+                        right_qty = st.number_input(
+                            "우 수량", min_value=0,
+                            value=st.session_state["lr_quantity_override"].get(key_base, {}).get("R", int(수량 / 2)),
+                            step=1, key=f"right_qty_{idx}",
+                        )
+                    st.session_state["lr_quantity_override"][key_base] = {"L": left_qty, "R": right_qty, "품목": 품목, "사양": 사양}
+                    total = left_qty + right_qty
+                    if total != 수량:
+                        st.warning(f"좌우 합계({total})가 기본 수량({수량})과 다릅니다.")
+                else:
+                    if key_base in st.session_state["lr_quantity_override"]:
+                        del st.session_state["lr_quantity_override"][key_base]
+        else:
+            # 일반 품목: 방향 선택 + 수량 분리
+            cols = st.columns([1, 2])
+            with cols[0]:
+                if calc_dir:
+                    dir_display = "좌 (L)" if calc_dir in ["left", "좌"] else "우 (R)"
+                    st.success(f"계산 결과: {dir_display}")
+                    direction_kr = "좌" if calc_dir in ["left", "좌"] else "우"
+                else:
+                    direction_choice = st.radio(
+                        "방향",
+                        options=["좌 (L)", "우 (R)"],
+                        index=0,
+                        horizontal=True,
+                        key=f"lr_dir_radio_{idx}",
                     )
+                    direction_kr = "좌" if "좌" in direction_choice else "우"
 
-                with col3:
-                    right_qty = st.number_input(
-                        "우 (R) 수량",
-                        min_value=0,
-                        value=int(기본수량 / 2) if key_base not in st.session_state["lr_quantity_override"] else st.session_state["lr_quantity_override"][key_base].get("R", int(기본수량 / 2)),
-                        step=1,
-                        key=f"right_qty_{idx}"
-                    )
+                # session_state에 저장
+                if state_key:
+                    st.session_state[state_key] = direction_kr
 
-                # session state에 저장
-                st.session_state["lr_quantity_override"][key_base] = {
-                    "L": left_qty,
-                    "R": right_qty,
-                    "품목": 품목,
-                    "사양": 사양
-                }
-
-                total = left_qty + right_qty
-                if total != 기본수량:
-                    st.warning(f"⚠️ 좌우 합계({total})가 기본 수량({기본수량})과 다릅니다.")
-            else:
-                # 별도 지정 해제 시 session state에서 제거
-                if key_base in st.session_state["lr_quantity_override"]:
-                    del st.session_state["lr_quantity_override"][key_base]
-else:
-    st.info("L/R 구분이 필요한 품목이 없습니다.")
+            with cols[1]:
+                # 수량 분리
+                key_base = f"{품목}_{사양}"
+                use_separate = st.checkbox(
+                    "좌/우 수량 별도 지정",
+                    key=f"use_separate_{idx}",
+                    value=key_base in st.session_state["lr_quantity_override"],
+                )
+                if use_separate:
+                    sq1, sq2 = st.columns(2)
+                    with sq1:
+                        left_qty = st.number_input(
+                            "좌 수량", min_value=0,
+                            value=st.session_state["lr_quantity_override"].get(key_base, {}).get("L", int(수량 / 2)),
+                            step=1, key=f"left_qty_{idx}",
+                        )
+                    with sq2:
+                        right_qty = st.number_input(
+                            "우 수량", min_value=0,
+                            value=st.session_state["lr_quantity_override"].get(key_base, {}).get("R", int(수량 / 2)),
+                            step=1, key=f"right_qty_{idx}",
+                        )
+                    st.session_state["lr_quantity_override"][key_base] = {"L": left_qty, "R": right_qty, "품목": 품목, "사양": 사양}
+                    total = left_qty + right_qty
+                    if total != 수량:
+                        st.warning(f"좌우 합계({total})가 기본 수량({수량})과 다릅니다.")
+                else:
+                    if key_base in st.session_state["lr_quantity_override"]:
+                        del st.session_state["lr_quantity_override"][key_base]
 
 # 전체 품목 추출
 st.markdown("---")
